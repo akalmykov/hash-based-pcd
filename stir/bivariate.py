@@ -19,7 +19,8 @@ class BivariatePolynomial:
         return len(self.matrix[0])
 
     def evaluate(self, x, y):
-        result = type(x)(0)  # Create a zero element in the same Galois Field
+        field = type(x)
+        result = field(0)  # Create a zero element in the same Galois Field
         for row in range(self.rows()):
             for col in range(self.cols()):
                 term = self.matrix[row][col] * x**row * y**col
@@ -27,9 +28,10 @@ class BivariatePolynomial:
         return result
 
     def fold_by_col(self, alpha):
+        field = type(alpha)
         transposed = self.matrix.T
 
-        result = np.zeros(self.rows(), dtype=int)
+        result = field([0 for _ in range(self.rows())])
 
         pow_alpha = 1
         for col in transposed:
@@ -37,14 +39,15 @@ class BivariatePolynomial:
             result = result + scaled_col
             pow_alpha = pow_alpha * alpha
 
-        return result
+        return galois.Poly(list(reversed(result)), field=field)
 
 
 def to_coefficient_matrix(poly_coeffs, rows, cols):
     if len(poly_coeffs) > rows * cols:
         raise ValueError("Degree of polynomial is too large for matrix")
 
-    matrix = np.zeros((rows, cols), dtype=int)
+    gf = type(poly_coeffs[0])
+    matrix = gf([[0 for _ in range(cols)] for _ in range(rows)])
 
     for i, coeff in enumerate(poly_coeffs):
         row = i // cols
@@ -62,6 +65,7 @@ if __name__ == "__main__":
     # galois.Poly EXPECTS IN THE ORDER X^d, X^d-1, ..., X^0
     # coefficients ${a_{d}, a_{d-1}, \dots, a_1, a_0}$
     gpoly = galois.Poly(list(reversed(coeff)), field=gf64)
+    print(gpoly.degree)
     rows = 3
     cols = 2
     bivariate_poly = to_coefficient_matrix(poly, rows, cols)
@@ -79,7 +83,7 @@ if __name__ == "__main__":
     # 2 3  ==> 2x^1 * y^0 + 3x^1 * y^1  ===  2x^2 + 3x^3  ==> fold these columns by alpha
     # 4 5  ==> 4x^2 * y^0 + 5x^2 * y^1  ===  4x^4 + 5x^5
     # The relationship between the original polynomial and the bivariate one is:
-    # f(z) = bivariate(z^n, z)
+    # f(z) = q(z^n, z)
     # y=x^cols=x^2
     # 0X^0 + 1X^1 + 2X^2 + 3X^3 + 4X^4 + 5X^5
     # https://mhostetter.github.io/galois/latest/basic-usage/poly-arithmetic/#special-arithmetic
