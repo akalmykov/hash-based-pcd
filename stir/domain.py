@@ -1,3 +1,4 @@
+import json
 import galois
 from constants import FIELD192, TEST_FIELD
 import numpy as np
@@ -106,7 +107,7 @@ class Domain:
         return self.domain.group_gen
 
     def omega_pows(self):
-        return self.domain.omega_pows
+        return self.domain.omega_pows()
 
 
 if __name__ == "__main__":
@@ -160,13 +161,28 @@ if __name__ == "__main__":
     p = galois.Poly([2, 7, 5, 3], field=GF)
     print(p)
     print(p(domain.omega_pows()))
-    print(domain.evaluate(p))
-    assert (p(domain.omega_pows()) == domain.evaluate(p)).all()
+    print(domain.evaluate_poly(p))
+    assert (p(domain.omega_pows()) == domain.evaluate_poly(p)).all()
     print(domain.size)
     print(domain.evaluation_domain_size())
     print(galois.ntt(p.coeffs, GF.order - 1, GF.order))
     print(galois.ntt(list(reversed([2, 7, 5, 3])), GF.order - 1, GF.order))
     print(galois.ntt(list(reversed(p.coeffs)), GF.order - 1, GF.order))
     print(np.fft.fft(p.coeffs, n=GF.order - 1))
+
+    with open("../../stir/domain_points.json", "r") as f:
+        domain_points = json.load(f)
+
+    GF = galois.GF(FIELD192)
+    t = GF([int(domain_points[i]) for i in range(len(domain_points))])
+
+    print(GF.properties)
+    domain = Domain(GF, 2**10, 2)
+    print(len(domain_points))
+    print(len(domain.omega_pows()))
+    assert len(domain_points) == len(domain.omega_pows())
+    assert (t == domain.omega_pows()).all()
+
+    # assert (domain.omega_pows() == domain_points).all()
 
     pass

@@ -24,7 +24,7 @@ class Prover:
         end_time = time.time()
         print(f"Field init: {end_time - start_time} seconds")
 
-        self.starting_degree = 2**10
+        self.starting_degree = 2**20  # Evaluate polynomial: 296.5279061794281 seconds
         self.stopping_degree = 2**6
         self.protocol_security_level = 106
         self.security_level = 128

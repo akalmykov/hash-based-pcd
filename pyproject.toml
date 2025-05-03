@@ -6,5 +6,6 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "galois>=0.4.4",
+    "python-flint>=0.7.1",
     "sympy>=1.13.3",
 ]
