@@ -2,6 +2,7 @@ import json
 import galois
 from constants import FIELD192, TEST_FIELD
 import numpy as np
+from utils import stack_evals
 
 
 def is_power_of_two(n):
@@ -183,6 +184,68 @@ if __name__ == "__main__":
     assert len(domain_points) == len(domain.omega_pows())
     assert (t == domain.omega_pows()).all()
 
+    with open("../../stir/evals.json", "r") as f:
+        evals = json.load(f)
+    t_evals = GF([int(evals[i]) for i in range(len(evals))])
+    print(t_evals[-1])
+
+    with open("../../stir/poly_coeffs.json", "r") as f:
+        poly_coeffs = json.load(f)
+    t_poly_coeffs = GF([int(poly_coeffs[i]) for i in range(len(poly_coeffs))])
+
+    my_evals = domain.evaluate_poly_coeff(t_poly_coeffs)
+    assert (my_evals == t_evals).all()
     # assert (domain.omega_pows() == domain_points).all()
+    stacked_evals = stack_evals(my_evals, 16)
+
+    with open("../../stir/folded_evals.json", "r") as f:
+        folded_evals_json = json.load(f)
+
+    t_folded_evals = []
+    for leaf in folded_evals_json:
+        t_folded_evals.append(GF([GF(leaf[i]) for i in range(len(leaf))]))
+
+    for i in range(len(stacked_evals)):
+        assert (stacked_evals[i] == t_folded_evals[i]).all()
+
+    with open("../../stir/merkle_tree.json", "r") as f:
+        merkle_tree = json.load(f)
+
+    leaf_nodes = []
+    for node in merkle_tree["leaf_nodes"]:
+        # Extract the byte array from the string format "SHA3Digest([...])"
+        byte_str = node[11:-1]  # Remove "SHA3Digest(" and ")"
+        bytes_list = [int(x) for x in byte_str.strip("[]").split(", ")]
+        leaf_nodes.append(bytes_list)
+    from hashlib import sha3_256
+
+    # Convert the last folded eval array to bytes
+    last_eval = t_folded_evals[-1]
+    last_eval_len = len(last_eval)
+    print(last_eval)
+    last_eval_bytes = bytes([last_eval_len] + [0] * 7) + b"".join(
+        [int(x).to_bytes(24, "little") for x in last_eval]
+    )
+
+    # Calculate SHA3-256 digest
+    sha3 = sha3_256()
+    sha3.update(last_eval_bytes)
+    calculated_digest = list(sha3.digest())
+    print(leaf_nodes)
+    print(calculated_digest)
+    assert leaf_nodes[-1] == calculated_digest
+    print("Bytes in last_eval_bytes:", [b for b in last_eval_bytes])
+
+    l1 = [2568590649130636328156454025689191507038995861110281789944]
+    t1 = b"".join([int(x).to_bytes(24, "little") for x in l1])
+    print("Bytes in t1:", [b for b in t1])
+
+    # l2 = [2568590649130636328156454025689191507038995861110281789944]
+    # t2 = b"".join([int(x).to_bytes(24, "big") for x in l2])
+    # print("Bytes in t2:", [b for b in t2])
+
+    # l3 = [2568590649130636328156454025689191507038995861110281789944]
+    # t3 = b"".join([int(x).to_bytes(24, "big") for x in l3])
+    # print("Bytes in t3:", [b for b in t3])
 
     pass
