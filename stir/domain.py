@@ -2,27 +2,8 @@ import json
 import galois
 from constants import FIELD192, TEST_FIELD
 import numpy as np
-from utils import stack_evals
-
-
-def is_power_of_two(n):
-    return n & (n - 1) == 0
-
-
-def next_power_of_two(n):
-    return 1 << (n - 1).bit_length()
-
-
-def get_two_adicity(GF):
-    n = GF.order - 1
-
-    # Count trailing zeros to get two-adicity
-    adicity = 0
-    while n & 1 == 0:
-        adicity += 1
-        n >>= 1
-
-    return adicity
+from utils import stack_evals, is_power_of_two, next_power_of_two, get_two_adicity
+from merkle import MerkleTree, hash_field_vector, hash_pair, serialize_field_vector
 
 
 # A function for extending a short array to a specified length:
@@ -219,27 +200,61 @@ if __name__ == "__main__":
         leaf_nodes.append(bytes_list)
     from hashlib import sha3_256
 
-    # Convert the last folded eval array to bytes
     last_eval = t_folded_evals[-1]
-    last_eval_len = len(last_eval)
-    print(last_eval)
-    last_eval_bytes = bytes([last_eval_len] + [0] * 7) + b"".join(
-        [int(x).to_bytes(24, "little") for x in last_eval]
-    )
+    last_eval_bytes = serialize_field_vector(last_eval)
 
     # Calculate SHA3-256 digest
     sha3 = sha3_256()
     sha3.update(last_eval_bytes)
     calculated_digest = list(sha3.digest())
-    print(leaf_nodes)
-    print(calculated_digest)
+    # print(leaf_nodes)
+    # print(calculated_digest)
     assert leaf_nodes[-1] == calculated_digest
-    print("Bytes in last_eval_bytes:", [b for b in last_eval_bytes])
+    assert calculated_digest == hash_field_vector(last_eval)
+    assert len(leaf_nodes) == len(stacked_evals)
+    for i, leaf in enumerate(leaf_nodes):
+        assert leaf == hash_field_vector(stacked_evals[i])
+    # print("Bytes in last_eval_bytes:", [b for b in last_eval_bytes])
 
-    l1 = [2568590649130636328156454025689191507038995861110281789944]
-    t1 = b"".join([int(x).to_bytes(24, "little") for x in l1])
-    print("Bytes in t1:", [b for b in t1])
+    # l1 = [2568590649130636328156454025689191507038995861110281789944]
+    # t1 = b"".join([int(x).to_bytes(24, "little") for x in l1])
+    # print("Bytes in t1:", [b for b in t1])
 
+    # calculate non leaf nodes from staked_evals
+    # store the non-leaf nodes in level order. The first element is the root node.
+    # the ith nodes (starting at 1st) children are at indices 2*i, 2*i+1
+    non_leaf_nodes = []
+    for node in merkle_tree["non_leaf_nodes"]:
+        # Extract the byte array from the string format "SHA3Digest([...])"
+        byte_str = node[11:-1]  # Remove "SHA3Digest(" and ")"
+        bytes_list = [int(x) for x in byte_str.strip("[]").split(", ")]
+        non_leaf_nodes.append(bytes_list)
+
+    right = hash_field_vector(stacked_evals[-1])
+    left = hash_field_vector(stacked_evals[-2])
+    last_non_leaf = hash_pair(left, right)
+
+    mt = MerkleTree(stacked_evals)
+    for i, leaf in enumerate(mt.leaf_nodes):
+        assert leaf == hash_field_vector(stacked_evals[i])
+
+    print("mt.non_leaf_nodes[-1]", mt.non_leaf_nodes[-1])
+    print("last_non_leaf", last_non_leaf)
+    assert mt.non_leaf_nodes[-1] == last_non_leaf
+
+    j = 0
+    for i in range(0, len(stacked_evals), 2):
+        h1 = hash_pair(
+            hash_field_vector(stacked_evals[i]),
+            hash_field_vector(stacked_evals[i + 1]),
+        )
+        h2 = mt.non_leaf_nodes[len(stacked_evals) // 2 - 1 + j]
+        assert h1 == h2
+        j += 1
+
+    for i in range(len(mt.non_leaf_nodes)):
+        assert mt.non_leaf_nodes[i] == non_leaf_nodes[i]
+    print("Merkle tree root: ", non_leaf_nodes[0])
     # l2 = [2568590649130636328156454025689191507038995861110281789944]
     # t2 = b"".join([int(x).to_bytes(24, "big") for x in l2])
     # print("Bytes in t2:", [b for b in t2])
