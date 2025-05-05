@@ -27,6 +27,9 @@ def hash_pair(left_hash, right_hash):
 
 class MerkleTree:
 
+    def root(self):
+        return self.non_leaf_nodes[0]
+
     def height(self):
         ceil(log2(len(self.leaf_nodes)))
 

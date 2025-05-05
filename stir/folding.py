@@ -76,6 +76,7 @@ if __name__ == "__main__":
     folding_factor = 2
     folding_randomness = gf64(5)
     folded_poly = poly_fold(poly, folding_factor, folding_randomness)
+    folded_poly = galois.Poly(list(reversed(folded_poly)), field=gf64)
     print(folded_poly)
     root_of_unity = gf64.primitive_root_of_unity(256)
     # print(root_of_unity)
