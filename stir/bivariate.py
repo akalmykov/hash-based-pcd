@@ -39,7 +39,7 @@ class BivariatePolynomial:
             result = result + scaled_col
             pow_alpha = pow_alpha * alpha
 
-        return field(result)  # galois.Poly(list(reversed(result)), field=field)
+        return field(result)
 
 
 def to_coefficient_matrix(poly_coeffs, rows, cols):

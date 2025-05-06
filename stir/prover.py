@@ -23,7 +23,8 @@ class Prover:
         self.security_level = 128
         self.starting_rate = 2
         self.folding_factor = 16
-        self.sponge = Blake3Sponge()
+        self.ood_samples = 2
+        self.sponge = Blake3Sponge(self.field, 191)
 
     def num_rounds(self):
         d = self.starting_degree
@@ -39,33 +40,47 @@ class Prover:
         return num_rounds
 
     def commit(self, witness_polynomial):
+        self.witness_polynomial = witness_polynomial
         start_time = time.time()
-        domain = Domain(self.field, self.starting_degree, self.starting_rate)
+        self.domain = Domain(self.field, self.starting_degree, self.starting_rate)
         end_time = time.time()
         print(f"Domain: {end_time - start_time} seconds")
 
         start_time = time.time()
-        evals = domain.evaluate_poly_coeff(witness_polynomial)
+        evals = self.domain.evaluate_poly_coeff(self.witness_polynomial)
         end_time = time.time()
         print(f"Evaluate polynomial: {end_time - start_time} seconds")
 
         start_time = time.time()
-        folded_evals = stack_evals(evals, self.folding_factor)
+        self.folded_evals = stack_evals(evals, self.folding_factor)
         end_time = time.time()
         print(f"Stack evals: {end_time - start_time} seconds")
 
-        self.merkle_tree = MerkleTree(folded_evals)
-        self.witness_polynomial = witness_polynomial
+        self.merkle_tree = MerkleTree(self.folded_evals)
 
     def round(self, folding_randomness):
         g_poly = poly_fold(
             self.witness_polynomial, self.folding_factor, folding_randomness
         )
-        print(g_poly)
+        old_size = self.domain.get_size()
+        self.domain.scale_with_offset(2)
+        g_eval = self.domain.evaluate_poly_coeff(g_poly)
+        g_folded_eval = stack_evals(g_eval, self.folding_factor)
+        g_merkle = MerkleTree(g_folded_eval)
+        self.sponge.absorb(bytes(g_merkle.root()))
+
+        ood_rand = self.sponge.squeeze_several_f(self.ood_samples)
+
+        betas = galois.Poly(list(reversed(g_poly)), field=self.field)(ood_rand)
+        self.sponge.absorb_field_vec(betas)
+        comb_randomness = self.sponge.squeeze_f()
+        next_folding_randomness = self.sponge.squeeze_f()
+        scaling_factor = old_size // self.folding_factor
 
     def prove(self):
         self.sponge.absorb(bytes(self.merkle_tree.root()))
-        folding_randomness = self.sponge.squeeze_field(self.field, 191)
+        folding_randomness = self.sponge.squeeze_f()
+
         n = self.num_rounds()
         proofs = []
         for _ in range(n):

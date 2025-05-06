@@ -43,7 +43,7 @@ class Radix2EvaluationDomain:
         # self.omega_pows = self.GF([self.group_gen ** (i) for i in range(self.size)])
 
     def omega_pows(self):
-        return self.GF([self.group_gen ** (i) for i in range(self.size)])
+        return self.GF([self.offset * self.group_gen ** (i) for i in range(self.size)])
 
     # # Method to construct evaluation matrix for the given domain
     # def as_vandermonde_matrix(self):
@@ -59,9 +59,63 @@ class Radix2EvaluationDomain:
     def evaluate_poly(self, poly):
         return self.evaluate_poly_coeff(list(reversed(poly.coeffs)))
 
+    def coset_transform(self, coeffs):
+        size = self.size
+        coeffs = coeffs.copy()
+        first_chunk = coeffs[:size].copy()
+        print("first_chunk", first_chunk)
+
+        offset = self.offset
+
+        for i in range(1, len(coeffs) // size):
+            chunk = coeffs[i * size : (i + 1) * size]
+            if offset == 1:
+                first_chunk += chunk
+            else:
+                offset_power = offset ** (i * size)
+                first_chunk += offset_power * chunk
+        return first_chunk
+
     def evaluate_poly_coeff(self, poly_coeff):
         print(f"evaluating poly coeff size {len(poly_coeff)}, domain size {self.size}")
-        return galois.ntt(poly_coeff, self.size, self.GF.order)
+        if self.offset > 1:
+            # coeffs = []
+            # for i, coeff in enumerate(poly_coeff):
+            #     coeffs.append(poly_coeff[i] * self.offset ** (1))
+            pows = self.omega_pows()
+            p = galois.Poly(list(reversed(poly_coeff)), field=self.GF)
+            return p(pows)
+            # return galois.ntt(
+            #     self.coset_transform(poly_coeff),
+            #     self.size,
+            #     self.GF.order,
+            # )
+            # return galois.ntt(coeffs, self.size, self.GF.order)
+
+        else:
+            return galois.ntt(poly_coeff, self.size, self.GF.order)
+
+    def scale(self, power):
+        # TODO: refactor DRY
+        self.size = self.size // power
+        self.log_size = self.size.bit_length() - 1
+        if self.log_size > get_two_adicity(self.GF):
+            raise ValueError("log_size is too large")
+
+        self.size_as_field_element = self.GF(self.size)
+        self.size_inv = self.size_as_field_element**-1
+        group_gen = self.group_gen**power
+        group_gen_inv = self.group_gen_inv**power
+        self.offset = (self.offset**power) * self.group_gen
+        self.offset_inv = (self.offset_inv**power) * self.group_gen_inv
+        self.group_gen = group_gen
+        self.group_gen_inv = group_gen_inv
+
+        print("self.offset", self.offset)
+        print("group_gen", group_gen)
+        print("group_gen_inv", group_gen_inv)
+        print("offset", self.offset)
+        print("offset_inv", self.offset_inv)
 
 
 class Domain:
@@ -90,6 +144,12 @@ class Domain:
 
     def omega_pows(self):
         return self.domain.omega_pows()
+
+    def scale_with_offset(self, power):
+        self.domain.scale(power)
+
+    def get_size(self):
+        return self.domain.size
 
 
 if __name__ == "__main__":
