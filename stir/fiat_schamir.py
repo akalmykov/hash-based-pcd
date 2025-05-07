@@ -113,7 +113,7 @@ if __name__ == "__main__":
     )
     import json
 
-    with open("../../stir/fs1.json", "r") as f:
+    with open("./test/original-stir-traces/fs1.json", "r") as f:
         fs = json.load(f)
 
     merkle_root = [
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     fs1_list = list(fs1)
     assert fs1_list == fs
 
-    with open("../../stir/fs_bits.json", "r") as f:
+    with open("./test/original-stir-traces/fs_bits.json", "r") as f:
         t_fs_bits = json.load(f)
     sponge = Blake3Sponge(GF, 191)
     sponge.absorb(bytes(merkle_root))
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     sponge.absorb(bytes(merkle_root))
 
     folding_randomness = sponge.squeeze_field_element(GF, 191)
-    with open("../../stir/folding_randomness.json", "r") as f:
+    with open("./test/original-stir-traces/folding_randomness.json", "r") as f:
         t_folding_randomness = int(json.load(f))
 
     assert folding_randomness == t_folding_randomness

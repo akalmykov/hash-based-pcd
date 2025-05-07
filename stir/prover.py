@@ -9,6 +9,18 @@ from folding import poly_fold
 from pow import proof_of_work
 from utils import stack_evals
 from merkle import MerkleTree
+from dataclasses import dataclass
+from typing import List, Tuple
+
+
+@dataclass
+class RoundProof:
+    g_root: bytes
+    betas: galois.Array
+    queries_to_prev: Tuple[List[galois.Array]]
+    ans_polynomial: galois.Poly
+    shake_polynomial: galois.Poly
+    pow_nonce: int
 
 
 class Prover:
@@ -136,7 +148,8 @@ class Prover:
         g_eval = self.domain.evaluate_poly_coeff(g_poly)
         g_folded_eval = stack_evals(g_eval, self.folding_factor)
         g_merkle = MerkleTree(g_folded_eval)
-        self.sponge.absorb(bytes(g_merkle.root()))
+        g_root = bytes(g_merkle.root())
+        self.sponge.absorb(g_root)
 
         ood_rand = self.sponge.squeeze_several_f(self.ood_samples)
 
@@ -186,11 +199,26 @@ class Prover:
             shake_polynomial = shake_polynomial + num_polynomial // den_polynomial
 
         vanishing_polynomial = galois.Poly.One(self.field)
+        x = galois.Poly.Identity(self.field)
         for s in quotient_set:
             vanishing_polynomial *= x - s
         numerator = _g_poly_evaluator + ans_polynomial
         quotient_polynomial = numerator // vanishing_polynomial
-        print("quotient_polynomial", quotient_polynomial)
+
+        scaling_poly_coeffs = [comb_randomness**i for i in range(len(quotient_set) + 1)]
+        scaling_polynomial = galois.Poly(
+            scaling_poly_coeffs, field=self.field, order="asc"
+        )
+
+        self.witness_polynomial = quotient_polynomial * scaling_polynomial
+        return RoundProof(
+            g_root,
+            betas,
+            queries_to_prev,
+            ans_polynomial,
+            shake_polynomial,
+            pow_nonce,
+        )
 
     def prove(self):
         self.sponge.absorb(bytes(self.merkle_tree.root()))
@@ -204,7 +232,7 @@ class Prover:
 
 if __name__ == "__main__":
     prover = Prover()
-    with open("../../stir/poly_coeffs.json", "r") as f:
+    with open("./test/original-stir-traces/poly_coeffs.json", "r") as f:
         fixed_poly = json.load(f)
     poly_coeffs = prover.field([int(fixed_poly[i]) for i in range(len(fixed_poly))])
 

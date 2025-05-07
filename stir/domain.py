@@ -236,7 +236,7 @@ if __name__ == "__main__":
     print(galois.ntt(list(reversed(p.coeffs)), GF.order - 1, GF.order))
     print(np.fft.fft(p.coeffs, n=GF.order - 1))
 
-    with open("../../stir/domain_points.json", "r") as f:
+    with open("./test/original-stir-traces/domain_points.json", "r") as f:
         domain_points = json.load(f)
 
     GF = galois.GF(FIELD192)
@@ -249,12 +249,12 @@ if __name__ == "__main__":
     assert len(domain_points) == len(domain.omega_pows())
     assert (t == domain.omega_pows()).all()
 
-    with open("../../stir/evals.json", "r") as f:
+    with open("./test/original-stir-traces/evals.json", "r") as f:
         evals = json.load(f)
     t_evals = GF([int(evals[i]) for i in range(len(evals))])
     print(t_evals[-1])
 
-    with open("../../stir/poly_coeffs.json", "r") as f:
+    with open("./test/original-stir-traces/poly_coeffs.json", "r") as f:
         poly_coeffs = json.load(f)
     t_poly_coeffs = GF([int(poly_coeffs[i]) for i in range(len(poly_coeffs))])
 
@@ -263,7 +263,7 @@ if __name__ == "__main__":
     # assert (domain.omega_pows() == domain_points).all()
     stacked_evals = stack_evals(my_evals, 16)
 
-    with open("../../stir/folded_evals.json", "r") as f:
+    with open("./test/original-stir-traces/folded_evals.json", "r") as f:
         folded_evals_json = json.load(f)
 
     t_folded_evals = []
@@ -273,7 +273,7 @@ if __name__ == "__main__":
     for i in range(len(stacked_evals)):
         assert (stacked_evals[i] == t_folded_evals[i]).all()
 
-    with open("../../stir/merkle_tree.json", "r") as f:
+    with open("./test/original-stir-traces/merkle_tree.json", "r") as f:
         merkle_tree = json.load(f)
 
     leaf_nodes = []
