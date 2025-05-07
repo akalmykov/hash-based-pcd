@@ -2,6 +2,8 @@ from hashlib import sha3_256
 from math import log2, ceil
 from utils import is_power_of_two
 import galois
+from dataclasses import dataclass
+from typing import List
 
 
 def serialize_field_vector(field_vector):
@@ -25,13 +27,21 @@ def hash_pair(left_hash, right_hash):
     return list(hasher.digest())
 
 
+@dataclass
+class MerkleMultiProof:
+    indexes: List[int]
+    auth_paths_prefix_lengths: List[int]
+    auth_paths_suffixes: List[List[bytes]]
+    leaf_siblings_hashes: List[bytes]
+
+
 class MerkleTree:
 
     def root(self):
         return self.non_leaf_nodes[0]
 
     def height(self):
-        ceil(log2(len(self.leaf_nodes)))
+        return int(log2(len(self.leaf_nodes))) + 1
 
     def __init__(self, leaf_nodes_data):
         size_leaf = len(leaf_nodes_data)
@@ -40,7 +50,6 @@ class MerkleTree:
         # Calculate non-leaf nodes from stacked_evals
         # Store the non-leaf nodes in level order. The first element is the root node.
         # The ith node's (starting at index 0) children are at indices 2*i+1, 2*i+2
-        tree_height = self.height()
         size_non_leaf = size_leaf - 1
         # hash_of_empty = int(0).to_bytes(32)
         self.non_leaf_nodes = [None] * size_non_leaf
@@ -59,6 +68,74 @@ class MerkleTree:
             left_child = self.non_leaf_nodes[left_child_index]
             right_child = self.non_leaf_nodes[right_child_index]
             self.non_leaf_nodes[i] = hash_pair(left_child, right_child)
+
+    def get_leaf_sibling_hash(self, index):
+        if index & 1 == 0:
+            return self.leaf_nodes[index + 1]
+        else:
+            return self.leaf_nodes[index - 1]
+
+    def convert_index_to_last_level(self, index, tree_height):
+        return index + (1 << (tree_height - 1)) - 1
+
+    def parent(self, index):
+        return (index - 1) >> 1
+
+    def is_left_non_leaf_child(self, index):
+        return index & 1 == 1
+
+    def non_leaf_sibling(self, index):
+        if index == 0:
+            return None
+        elif self.is_left_non_leaf_child(index):
+            return index + 1
+        else:
+            return index - 1
+
+    def compute_auth_path(self, index):
+        tree_height = self.height()
+        leaf_index_in_tree = self.convert_index_to_last_level(index, tree_height)
+        # len(path) = `tree height - 2`, the two missing elements being the leaf sibling hash and the root
+        path = []
+        current_node = self.parent(leaf_index_in_tree)
+        while current_node != 0:
+            sibling_node = self.non_leaf_sibling(current_node)
+            path.append(self.non_leaf_nodes[sibling_node])
+            current_node = self.parent(current_node)
+
+        assert len(path) == tree_height - 2
+        path.reverse()
+        return path
+
+    def prefix_encode_path(self, prev_path, path):
+        prefix_length = 0
+        for a, b in zip(prev_path, path):
+            if a != b:
+                break
+            prefix_length += 1
+
+        return (prefix_length, path[prefix_length:])
+
+    def generate_multi_proof(self, indexes):
+        indexes = sorted(list(set(indexes)))
+        auth_paths_prefix_lengths = []
+        auth_paths_suffixes = []
+        leaf_siblings_hashes = []
+        prev_path = []
+        for index in indexes:
+            leaf_siblings_hashes.append(self.get_leaf_sibling_hash(index))
+            path = self.compute_auth_path(index)
+            prefix_len, suffix = self.prefix_encode_path(prev_path, path)
+            auth_paths_prefix_lengths.append(prefix_len)
+            auth_paths_suffixes.append(suffix)
+            prev_path = path
+
+        return MerkleMultiProof(
+            indexes=indexes,
+            auth_paths_prefix_lengths=auth_paths_prefix_lengths,
+            auth_paths_suffixes=auth_paths_suffixes,
+            leaf_siblings_hashes=leaf_siblings_hashes,
+        )
 
 
 # class MerkleTree:

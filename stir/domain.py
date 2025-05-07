@@ -117,6 +117,25 @@ class Radix2EvaluationDomain:
         print("offset", self.offset)
         print("offset_inv", self.offset_inv)
 
+    def scale_generator_by(self, power):
+        self.size = self.size // power
+        self.log_size = self.size.bit_length() - 1
+        self.size_as_field_element = self.GF(self.size)
+        self.size_inv = self.size_as_field_element**-1
+        group_gen = self.group_gen**power
+        group_gen_inv = group_gen**-1
+        self.offset = self.offset**power
+        self.offset_inv = self.offset_inv**power
+        self.group_gen = group_gen
+        self.group_gen_inv = group_gen_inv
+        self.offset_pow_size = self.offset**self.size
+
+    def element(self, i):
+        result = self.group_gen**i
+        if self.offset != self.GF(1):
+            result *= self.offset
+        return result
+
 
 class Domain:
 
@@ -147,6 +166,11 @@ class Domain:
 
     def scale_with_offset(self, power):
         self.domain.scale(power)
+
+    def new_scaled(self, power):
+        scaled_domain = Radix2EvaluationDomain(self.GF, self.size)
+        scaled_domain.scale_generator_by(power)
+        return scaled_domain
 
     def get_size(self):
         return self.domain.size

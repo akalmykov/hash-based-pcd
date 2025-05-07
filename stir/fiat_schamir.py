@@ -11,6 +11,11 @@ class Blake3Sponge:
         self.GF = GF
         self.field_size = field_size
 
+    def clone(self):
+        sponge_clone = Blake3Sponge(self.GF, self.field_size)
+        sponge_clone.hasher = self.hasher.copy()
+        return sponge_clone
+
     def absorb(self, input_data: bytes):
         self.hasher.update(input_data)
 
@@ -40,6 +45,13 @@ class Blake3Sponge:
 
     def squeeze_f(self):
         return self.squeeze_field_element(self.GF, self.field_size)
+
+    def squeeze_int(self, mod):
+        assert (mod & (mod - 1) == 0) and mod > 0, "Range must be a power of 2"
+
+        bytes_array = self.squeeze_bytes(8)
+        candidate = int.from_bytes(bytes_array, byteorder="little")
+        return candidate % mod
 
     def squeeze_field_element(self, GF, size):
         bits = self.squeeze_bits(size)
