@@ -171,6 +171,8 @@ class Prover:
         quotient_answers = [(x, _g_poly_evaluator(x)) for x in stir_randomness]
         quotient_answers.extend(beta_answers)
 
+        quotient_set = list(ood_rand) + stir_randomness
+
         x_values, y_values = zip(*quotient_answers)
         # Convert to Galois Arrays
         x_values = self.field(list(x_values))
@@ -182,7 +184,13 @@ class Prover:
             num_polynomial = ans_polynomial - galois.Poly([y], field=self.field)
             den_polynomial = galois.Poly([1, -x], field=self.field)
             shake_polynomial = shake_polynomial + num_polynomial // den_polynomial
-        print(shake_polynomial)
+
+        vanishing_polynomial = galois.Poly.One(self.field)
+        for s in quotient_set:
+            vanishing_polynomial *= x - s
+        numerator = _g_poly_evaluator + ans_polynomial
+        quotient_polynomial = numerator // vanishing_polynomial
+        print("quotient_polynomial", quotient_polynomial)
 
     def prove(self):
         self.sponge.absorb(bytes(self.merkle_tree.root()))
