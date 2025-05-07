@@ -177,7 +177,12 @@ class Prover:
         y_values = self.field(list(y_values))
 
         ans_polynomial = galois.lagrange_poly(x_values, y_values)
-        print("ans_polynomial", ans_polynomial)
+        shake_polynomial = galois.Poly.Zero(field=self.field)
+        for x, y in quotient_answers:
+            num_polynomial = ans_polynomial - galois.Poly([y], field=self.field)
+            den_polynomial = galois.Poly([1, -x], field=self.field)
+            shake_polynomial = shake_polynomial + num_polynomial // den_polynomial
+        print(shake_polynomial)
 
     def prove(self):
         self.sponge.absorb(bytes(self.merkle_tree.root()))
