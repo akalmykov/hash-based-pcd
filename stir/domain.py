@@ -81,34 +81,17 @@ class Radix2EvaluationDomain:
         p = galois.Poly(list(reversed(poly_coeff)), field=self.GF)
         return p(pows)
 
-    def eval_over_coset(self, poly_coeff):
-        coeffs = []
-        for i, coeff in enumerate(poly_coeff):
-            coeffs.append(coeff * self.offset ** (i))
-        return galois.ntt(
-            coeffs,
-            self.size,
-            self.GF.order,
-        )
-
     def evaluate_poly_coeff(self, poly_coeff):
         print(f"evaluating poly coeff size {len(poly_coeff)}, domain size {self.size}")
         if self.offset > 1:
-            # import time
-
-            # start = time.perf_counter()
-            # naive_eval = self.naive_eval(poly_coeff)
-            # naive_time = time.perf_counter() - start
-
-            # start = time.perf_counter()
-            ntt_eval = self.eval_over_coset(poly_coeff)
-            # ntt_time = time.perf_counter() - start
-
-            # print(f"Naive eval time: {naive_time:.4f}s")
-            # print(f"NTT eval time: {ntt_time:.4f}s")
-
-            # assert (ntt_eval == naive_eval).all()
-            return ntt_eval
+            coeffs = []
+            for i, coeff in enumerate(poly_coeff):
+                coeffs.append(coeff * self.offset ** (i))
+            return galois.ntt(
+                coeffs,
+                self.size,
+                self.GF.order,
+            )
         else:
             return galois.ntt(poly_coeff, self.size, self.GF.order)
 
