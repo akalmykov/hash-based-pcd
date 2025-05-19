@@ -8,7 +8,7 @@ from fiat_schamir import Blake3Sponge
 from folding import poly_fold
 from pow import proof_of_work
 from utils import stack_evals
-from merkle import MerkleTree
+from merkle import MerkleTree, MerkleMultiProof
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -21,6 +21,24 @@ class RoundProof:
     ans_polynomial: galois.Poly
     shake_polynomial: galois.Poly
     pow_nonce: int
+
+
+@dataclass
+class WitnessExtended:
+    domain: Domain
+    polynomial: galois.Poly
+    merkle_tree: MerkleTree
+    folded_evals: List[List[galois.Array]]
+    num_round: int
+    folding_randomness: galois.Array
+
+
+@dataclass
+class Proof:
+    round_proofs: List[RoundProof]
+    final_polynomial: galois.Array
+    queries_to_final: Tuple[List[List[galois.Array]], MerkleMultiProof]
+    pow_nonce: int | None
 
 
 class Prover:
@@ -124,6 +142,7 @@ class Prover:
         self.witness_polynomial = witness_polynomial
         start_time = time.time()
         self.domain = Domain(self.field, self.starting_degree, self.starting_rate)
+
         end_time = time.time()
         print(f"Domain: {end_time - start_time} seconds")
 
@@ -144,10 +163,10 @@ class Prover:
             self.witness_polynomial, self.folding_factor, folding_randomness
         )
         old_size = self.domain.get_size()
-        self.domain.scale_with_offset(2)
-        g_eval = self.domain.evaluate_poly_coeff(g_poly)
-        g_folded_eval = stack_evals(g_eval, self.folding_factor)
-        g_merkle = MerkleTree(g_folded_eval)
+        g_domain = self.domain.new_scale_with_offset(2)
+        g_eval = g_domain.evaluate_poly_coeff(g_poly)
+        g_folded_evals = stack_evals(g_eval, self.folding_factor)
+        g_merkle = MerkleTree(g_folded_evals)
         g_root = bytes(g_merkle.root())
         self.sponge.absorb(g_root)
 
@@ -176,6 +195,14 @@ class Prover:
         queries_to_prev_proof = self.merkle_tree.generate_multi_proof(
             stir_randomness_indexes
         )
+        print("indexes:", queries_to_prev_proof.indexes)
+        print(
+            "auth_paths_prefix_lengths:",
+            queries_to_prev_proof.auth_paths_prefix_lengths,
+        )
+        print("auth_paths_suffixes:", queries_to_prev_proof.auth_paths_suffixes)
+        print("leaf_siblings_hashes:", queries_to_prev_proof.leaf_siblings_hashes)
+
         queries_to_prev = (queries_to_prev_ans, queries_to_prev_proof)
         scaled_domain = self.domain.new_scaled(self.folding_factor)
         stir_randomness = [scaled_domain.element(i) for i in stir_randomness_indexes]
@@ -211,23 +238,73 @@ class Prover:
         )
 
         self.witness_polynomial = quotient_polynomial * scaling_polynomial
-        return RoundProof(
-            g_root,
-            betas,
-            queries_to_prev,
-            ans_polynomial,
-            shake_polynomial,
-            pow_nonce,
+        return (
+            RoundProof(
+                g_root,
+                betas,
+                queries_to_prev,
+                ans_polynomial,
+                shake_polynomial,
+                pow_nonce,
+            ),
+            WitnessExtended(
+                domain=g_domain,
+                polynomial=self.witness_polynomial.coefficients(order="asc"),
+                merkle_tree=g_merkle,
+                num_round=round_number + 1,
+                folding_randomness=next_folding_randomness,
+                folded_evals=g_folded_evals,
+            ),
         )
 
     def prove(self):
         self.sponge.absorb(bytes(self.merkle_tree.root()))
         folding_randomness = self.sponge.squeeze_f()
 
-        proofs = []
+        round_proofs = []
         for round_number in range(self.number_of_rounds):
-            round_proof = self.round(folding_randomness, round_number)
-            proofs.append(round_proof)
+            round_proof, witness = self.round(folding_randomness, round_number)
+            round_proofs.append(round_proof)
+        final_polynomial = poly_fold(
+            witness.polynomial, self.folding_factor, witness.folding_randomness
+        )
+        final_repetitions = self.repetitions[self.number_of_rounds]
+        scaling_factor = witness.domain.size // self.folding_factor
+        final_randomness_indexes = sorted(
+            list(
+                set(
+                    self.sponge.squeeze_int(scaling_factor)
+                    for _ in range(final_repetitions)
+                )
+            )
+        )
+        queries_to_final_ans = [
+            witness.folded_evals[i] for i in final_randomness_indexes
+        ]
+        queries_to_final_proof = witness.merkle_tree.generate_multi_proof(
+            final_randomness_indexes
+        )
+        # print("final_repetitions:", final_repetitions)
+        # print("scaling_factor:", scaling_factor)
+        # print("final_randomness_indexes:", final_randomness_indexes)
+        # print("queries_to_final_ans:", queries_to_final_ans)
+        queries_to_final = (queries_to_final_ans, queries_to_final_proof)
+        # print("MerkleMultiProof fields:")
+        # print("indexes:", queries_to_final_proof.indexes)
+        # print(
+        #     "auth_paths_prefix_lengths:",
+        #     queries_to_final_proof.auth_paths_prefix_lengths,
+        # )
+        # print("auth_paths_suffixes:", queries_to_final_proof.auth_paths_suffixes)
+        # print("leaf_siblings_hashes:", queries_to_final_proof.leaf_siblings_hashes)
+        pow_nonce = proof_of_work(self.sponge, self.pow_bits[self.number_of_rounds])
+        print("pow_nonce", pow_nonce)
+        return Proof(
+            round_proofs,
+            final_polynomial,
+            queries_to_final,
+            pow_nonce,
+        )
 
 
 if __name__ == "__main__":

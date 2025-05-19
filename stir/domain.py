@@ -136,6 +136,22 @@ class Radix2EvaluationDomain:
             result *= self.offset
         return result
 
+    def __str__(self):
+        return (
+            f"Radix2EvaluationDomain(\n"
+            f"  GF: {self.GF}\n"
+            f"  size: {self.size}\n"
+            f"  log_size: {self.log_size}\n"
+            f"  group_gen: {self.group_gen}\n"
+            f"  group_gen_inv: {self.group_gen_inv}\n"
+            f"  size_as_field_element: {self.size_as_field_element}\n"
+            f"  size_inv: {self.size_inv}\n"
+            f"  offset: {self.offset}\n"
+            f"  offset_inv: {self.offset_inv}\n"
+            f"  offset_pow_size: {self.offset_pow_size}\n"
+            f")"
+        )
+
 
 class Domain:
 
@@ -164,8 +180,13 @@ class Domain:
     def omega_pows(self):
         return self.domain.omega_pows()
 
-    def scale_with_offset(self, power):
+    def _scale_with_offset(self, power):
         self.domain.scale(power)
+
+    def new_scale_with_offset(self, power):
+        scaled_domain = Radix2EvaluationDomain(self.GF, self.size)
+        scaled_domain.scale(power)
+        return scaled_domain
 
     def new_scaled(self, power):
         scaled_domain = Radix2EvaluationDomain(self.GF, self.size)
