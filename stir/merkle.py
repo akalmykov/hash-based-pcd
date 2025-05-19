@@ -1,6 +1,6 @@
 from hashlib import sha3_256
 from math import log2, ceil
-from utils import is_power_of_two
+from .utils import is_power_of_two
 import galois
 from dataclasses import dataclass
 from typing import List

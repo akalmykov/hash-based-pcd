@@ -1,14 +1,14 @@
 import json
 import math
 import galois
-from constants import FIELD192
-from domain import Domain
+from .constants import FIELD192
+from .domain import Domain
 import time
-from fiat_schamir import Blake3Sponge
-from folding import poly_fold
-from pow import proof_of_work
-from utils import stack_evals
-from merkle import MerkleTree, MerkleMultiProof
+from .fiat_schamir import Blake3Sponge
+from .folding import poly_fold
+from .pow import proof_of_work
+from .utils import stack_evals
+from .merkle import MerkleTree, MerkleMultiProof
 from dataclasses import dataclass
 from typing import List, Tuple
 

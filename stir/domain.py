@@ -1,9 +1,9 @@
 import json
 import galois
-from constants import FIELD192, TEST_FIELD
+from .constants import FIELD192, TEST_FIELD
 import numpy as np
-from utils import stack_evals, is_power_of_two, next_power_of_two, get_two_adicity
-from merkle import MerkleTree, hash_field_vector, hash_pair, serialize_field_vector
+from .utils import stack_evals, is_power_of_two, next_power_of_two, get_two_adicity
+from .merkle import MerkleTree, hash_field_vector, hash_pair, serialize_field_vector
 
 
 # A function for extending a short array to a specified length:

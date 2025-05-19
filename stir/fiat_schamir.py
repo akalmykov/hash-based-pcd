@@ -1,7 +1,7 @@
 import blake3
 import galois
 from typing import List
-from merkle import serialize_field_vector
+from .merkle import serialize_field_vector
 
 
 class Blake3Sponge:

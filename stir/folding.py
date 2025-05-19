@@ -1,5 +1,5 @@
 import math
-from bivariate import to_coefficient_matrix
+from .bivariate import to_coefficient_matrix
 import galois
 
 
