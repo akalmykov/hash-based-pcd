@@ -21,7 +21,6 @@ def poly_quotient(poly, points):
 def quotient(claimed_eval, evaluation_point, answers: list[tuple[int, int]]):
     GF = type(claimed_eval)
     if evaluation_point in [answer[0] for answer in answers]:
-        # return answers[evaluation_point]
         raise ValueError("Evaluation point is in the domain")
     else:
         ans_polynomial = galois.lagrange_poly(

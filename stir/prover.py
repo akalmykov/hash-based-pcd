@@ -1,23 +1,25 @@
 import json
 import math
 import galois
+import pickle
 from .constants import FIELD192
 from .domain import Domain
 import time
-from .fiat_schamir import Blake3Sponge
+from .fiat_shamir import Blake3Sponge
 from .folding import poly_fold
 from .pow import proof_of_work
 from .utils import stack_evals
 from .merkle import MerkleTree, MerkleMultiProof
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
+from .stir_parameters import FullParameters, SoundnessType
 
 
 @dataclass
 class RoundProof:
     g_root: bytes
     betas: galois.Array
-    queries_to_prev: Tuple[List[galois.Array]]
+    queries_to_prev: Tuple[List[galois.Array], MerkleMultiProof]
     ans_polynomial: galois.Poly
     shake_polynomial: galois.Poly
     pow_nonce: int
@@ -39,17 +41,30 @@ class Proof:
     final_polynomial: galois.Array
     queries_to_final: Tuple[List[List[galois.Array]], MerkleMultiProof]
     pow_nonce: int | None
+    parameters: FullParameters
+
+    def serialize(self, filepath: str) -> None:
+        with open(filepath, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @staticmethod
+    def load(filepath: str) -> "Proof":
+        with open(filepath, "rb") as f:
+            proof = pickle.load(f)
+        return proof
 
 
 class Prover:
 
     def calc_repetitions(self, log_inv_rate):
         # Using Provable soundness type with constant = 2
-        return math.ceil(
-            (self.soundness_type * self.protocol_security_level) / log_inv_rate
+        return int(
+            math.ceil(
+                (self.soundness_type * self.protocol_security_level) / log_inv_rate
+            )
         )
 
-    def pow_bits(self, log_inv_rate):
+    def get_pow_bits(self, log_inv_rate):
         repetitions = self.calc_repetitions(log_inv_rate)
         print(f"*** ??? log_inv_rate = {log_inv_rate}")
         print(f"*** ??? repetitions = {repetitions}")
@@ -63,9 +78,9 @@ class Prover:
         else:
             return math.ceil(remaining_security_bits)  # Equivalent to ceil
 
-    def __init__(self):
+    def __init__(self, GF):
         start_time = time.time()
-        self.field = galois.GF(FIELD192)
+        self.field = GF
         end_time = time.time()
         print(f"Field init: {end_time - start_time} seconds")
 
@@ -90,15 +105,14 @@ class Prover:
                 for x in range(1, self.number_of_rounds + 1)
             ]
         )
-        self.pow_bits = [self.pow_bits(x) for x in self.rates]
+        self.pow_bits = [self.get_pow_bits(x) for x in self.rates]
         self.repetitions = [self.calc_repetitions(x) for x in self.rates]
 
         print("self.folding_factor", self.folding_factor)
         # Note, this skips the last repetition
         for i in range(self.number_of_rounds):
-            print("self.degrees[i]", self.degrees[i])
             self.repetitions[i] = min(
-                self.repetitions[i], self.degrees[i] / self.folding_factor
+                self.repetitions[i], self.degrees[i] // self.folding_factor
             )
 
         assert self.number_of_rounds + 1 == len(self.rates)
@@ -121,6 +135,21 @@ class Prover:
         print(f"log_folding: {self.log_folding}")
         print(f"pow_bits: {self.pow_bits}")
         print(f"repetitions: {self.repetitions}")
+        self.full_parameters = FullParameters(
+            security_level=self.security_level,
+            protocol_security_level=self.protocol_security_level,
+            starting_degree=self.starting_degree,
+            stopping_degree=self.stopping_degree,
+            folding_factor=self.folding_factor,
+            starting_rate=self.starting_rate,
+            soundness_type=SoundnessType.CONJECTURE,
+            num_rounds=self.number_of_rounds,
+            rates=self.rates,
+            repetitions=self.repetitions,
+            pow_bits=self.pow_bits,
+            ood_samples=self.ood_samples,
+            degrees=self.degrees,
+        )
 
     def num_rounds_and_degrees(self):
         d = self.starting_degree
@@ -304,6 +333,7 @@ class Prover:
             final_polynomial,
             queries_to_final,
             pow_nonce,
+            self.full_parameters,
         )
 
 

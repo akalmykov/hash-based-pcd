@@ -1,11 +1,37 @@
-from stir.prover import Prover
-import json
+from stir.stir_main import run_stir
+import argparse
 
 if __name__ == "__main__":
-    prover = Prover()
-    with open("./stir/test/original-stir-traces/poly_coeffs.json", "r") as f:
-        fixed_poly = json.load(f)
-    poly_coeffs = prover.field([int(fixed_poly[i]) for i in range(len(fixed_poly))])
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Run STIR protocol with options")
+    parser.add_argument(
+        "--prove",
+        dest="prove",
+        action="store_true",
+        default=True,
+        help="Run the proving part of the protocol (default: True)",
+    )
+    parser.add_argument(
+        "--no-prove",
+        dest="prove",
+        action="store_false",
+        help="Skip the proving part of the protocol",
+    )
+    parser.add_argument(
+        "--verify",
+        dest="verify",
+        action="store_true",
+        default=True,
+        help="Run the verification part of the protocol (default: True)",
+    )
+    parser.add_argument(
+        "--no-verify",
+        dest="verify",
+        action="store_false",
+        help="Skip the verification part of the protocol",
+    )
 
-    prover.commit(poly_coeffs)
-    prover.prove()
+    args = parser.parse_args()
+
+    # Pass the parsed arguments to run_stir
+    run_stir(prove=args.prove, verify=args.verify)

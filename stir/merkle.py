@@ -2,8 +2,9 @@ from hashlib import sha3_256
 from math import log2, ceil
 from .utils import is_power_of_two
 import galois
+import pickle
 from dataclasses import dataclass
-from typing import List
+from typing import List, TYPE_CHECKING
 
 
 def serialize_field_vector(field_vector):
@@ -34,6 +35,94 @@ class MerkleMultiProof:
     auth_paths_suffixes: List[List[bytes]]
     leaf_siblings_hashes: List[bytes]
 
+    def verify(self, root_hash, leaves):
+        """Verify that leaves at self.indexes of the merkle tree match the given root hash."""
+        if len(self.indexes) == 0:
+            return True
+
+        def prefix_decode_path(prev_path, prefix_length, suffix):
+            """Decode a path using prefix encoding."""
+            return prev_path[:prefix_length] + suffix
+
+        def convert_index_to_last_level(index, tree_height):
+            """Convert index to the last level index."""
+            return index + (1 << (tree_height - 1)) - 1
+
+        def parent(index):
+            """Get the parent index."""
+            return (index - 1) >> 1
+
+        def select_left_right_child(index, curr_hash, sibling_hash):
+            """Select left and right child based on index."""
+            if index % 2 == 0:
+                return curr_hash, sibling_hash
+            else:
+                return sibling_hash, curr_hash
+
+        tree_height = len(self.auth_paths_suffixes[0]) + 2
+
+        # Lookup table to avoid redundant hash computations
+        hash_lut = {}
+
+        # Init prev path for decoding
+        prev_path = self.auth_paths_suffixes[0]
+
+        for i in range(len(self.indexes)):
+            leaf_index = self.indexes[i]
+            leaf = leaves[i]
+            leaf_sibling_hash = self.leaf_siblings_hashes[i]
+
+            # Decode i-th auth path
+            auth_path = prefix_decode_path(
+                prev_path,
+                self.auth_paths_prefix_lengths[i],
+                self.auth_paths_suffixes[i],
+            )
+            # Update prev path for decoding next one
+            prev_path = auth_path
+
+            claimed_leaf_hash = hash_field_vector(leaf)
+
+            # Determine if the leaf is the left or right child
+            left_child, right_child = select_left_right_child(
+                leaf_index, claimed_leaf_hash, leaf_sibling_hash
+            )
+
+            # Track position in the path
+            index = leaf_index
+            index_in_tree = convert_index_to_last_level(leaf_index, tree_height)
+            index >>= 1
+            index_in_tree = parent(index_in_tree)
+
+            # Compute hash of the leaf level
+            curr_path_node = hash_lut.get(index_in_tree)
+            if curr_path_node is None:
+                curr_path_node = hash_pair(left_child, right_child)
+                hash_lut[index_in_tree] = curr_path_node
+
+            # Check levels between leaf level and root
+            for level in range(len(auth_path) - 1, -1, -1):
+                # Determine if current node is left or right child
+                left, right = select_left_right_child(
+                    index, curr_path_node, auth_path[level]
+                )
+
+                # Update position
+                index >>= 1
+                index_in_tree = parent(index_in_tree)
+
+                # Compute hash at this level
+                curr_path_node = hash_lut.get(index_in_tree)
+                if curr_path_node is None:
+                    curr_path_node = hash_pair(left, right)
+                    hash_lut[index_in_tree] = curr_path_node
+
+            # Check if final hash is root
+            if bytes(curr_path_node) != bytes(root_hash):
+                return False
+
+        return True
+
 
 class MerkleTree:
 
@@ -42,6 +131,16 @@ class MerkleTree:
 
     def height(self):
         return int(log2(len(self.leaf_nodes))) + 1
+
+    def serialize(self, filepath: str) -> None:
+        with open(filepath, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @staticmethod
+    def load(filepath: str) -> "MerkleTree":
+        with open(filepath, "rb") as f:
+            tree = pickle.load(f)
+        return tree
 
     def __init__(self, leaf_nodes_data):
         size_leaf = len(leaf_nodes_data)
@@ -136,67 +235,3 @@ class MerkleTree:
             auth_paths_suffixes=auth_paths_suffixes,
             leaf_siblings_hashes=leaf_siblings_hashes,
         )
-
-
-# class MerkleTree:
-#     """
-#     A simple and naive implementation of an immutable Merkle tree.
-#     """
-
-#     def __init__(self, GF, data):
-#         assert isinstance(data, list)
-#         assert len(data) > 0, "Cannot construct an empty Merkle Tree."
-#         num_leaves = 2 ** ceil(log2(len(data)))
-#         self.data = data + [GF(0)] * (num_leaves - len(data))
-#         self.height = int(log2(num_leaves))
-#         self.facts = {}
-#         self.root = self.build_tree()
-
-#     def get_authentication_path(self, leaf_id):
-#         assert 0 <= leaf_id < len(self.data)
-#         node_id = leaf_id + len(self.data)
-#         cur = self.root
-#         decommitment = []
-#         # In a Merkle Tree, the path from the root to a leaf, corresponds to the the leaf id's
-#         # binary representation, starting from the second-MSB, where '0' means 'left', and '1' means
-#         # 'right'.
-#         # We therefore iterate over the bits of the binary representation - skipping the '0b'
-#         # prefix, as well as the MSB.
-#         for bit in bin(node_id)[3:]:
-#             cur, auth = self.facts[cur]
-#             if bit == "1":
-#                 auth, cur = cur, auth
-#             decommitment.append(auth)
-#         return decommitment
-
-#     def build_tree(self):
-#         return self.recursive_build_tree(1)
-
-#     def recursive_build_tree(self, node_id):
-#         if node_id >= len(self.data):
-#             # A leaf.
-#             id_in_data = node_id - len(self.data)
-#             leaf_data = str(self.data[id_in_data])
-#             h = sha256(leaf_data.encode()).hexdigest()
-#             self.facts[h] = leaf_data
-#             return h
-#         else:
-#             # An internal node.
-#             left = self.recursive_build_tree(node_id * 2)
-#             right = self.recursive_build_tree(node_id * 2 + 1)
-#             h = sha256((left + right).encode()).hexdigest()
-#             self.facts[h] = (left, right)
-#             return h
-
-
-# def verify_decommitment(leaf_id, leaf_data, decommitment, root):
-#     leaf_num = 2 ** len(decommitment)
-#     node_id = leaf_id + leaf_num
-#     cur = sha256(str(leaf_data).encode()).hexdigest()
-#     for bit, auth in zip(bin(node_id)[3:][::-1], decommitment[::-1]):
-#         if bit == "0":
-#             h = cur + auth
-#         else:
-#             h = auth + cur
-#         cur = sha256(h.encode()).hexdigest()
-#     return cur == root

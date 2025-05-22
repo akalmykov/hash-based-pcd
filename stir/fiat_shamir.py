@@ -43,7 +43,7 @@ class Blake3Sponge:
     def reset(self):
         self.hasher = blake3.blake3()
 
-    def squeeze_f(self):
+    def squeeze_f(self) -> galois.FieldArray:
         return self.squeeze_field_element(self.GF, self.field_size)
 
     def squeeze_int(self, mod):

@@ -63,7 +63,6 @@ class Radix2EvaluationDomain:
         size = self.size
         coeffs = coeffs.copy()
         first_chunk = coeffs[:size].copy()
-        print("first_chunk", first_chunk)
 
         offset = self.offset
 
@@ -195,6 +194,9 @@ class Domain:
 
     def get_size(self):
         return self.domain.size
+
+    def element(self, i):
+        return self.domain.element(i)
 
 
 if __name__ == "__main__":

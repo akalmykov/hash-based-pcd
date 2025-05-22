@@ -1,26 +1,34 @@
+from .constants import FIELD192
+from .prover import Prover, Proof
+from .verifier import Verifier
 import galois
-import time
-from constants import FIELD192
+from .merkle import MerkleTree
+from .stir_parameters import Parameters, DEFAULT_PARAMETERS
 
 
-def main():
-    start_time = time.time()
-    field = galois.GF(FIELD192)
-    end_time = time.time()
-    print(f"Generate FIELD192: {end_time - start_time} seconds")
+def run_stir(prove: bool, verify: bool):
+    gf = galois.GF(FIELD192)
+    if prove:
+        prover = Prover(gf)
+        with open("./stir/test/original-stir-traces/poly_coeffs.json", "r") as f:
+            import json
 
-    starting_degree = 2**20
-    stopping_degree = 2**6
-    protocol_security_level = 106
-    security_level = 128
-    starting_rate = 2
-    folding_factor = 16
+            fixed_poly = json.load(f)
+        poly_coeffs = prover.field([int(fixed_poly[i]) for i in range(len(fixed_poly))])
 
-    start_time = time.time()
-    poly = field.Random(starting_degree + 1, seed=1)
-    end_time = time.time()
-    print(f"Generate random polynomial: {end_time - start_time} seconds")
+        prover.commit(poly_coeffs)
+        prover.merkle_tree.serialize("./stir/test/merkle_tree.pkl")
 
+        proof = prover.prove()
+        proof.serialize("./stir/test/proof.pkl")
+    else:
+        print("Skipped proving")
+    if verify:
 
-if __name__ == "__main__":
-    main()
+        mt = MerkleTree.load("./stir/test/merkle_tree.pkl")
+        proof = Proof.load("./stir/test/proof.pkl")
+
+        verifier = Verifier(gf, proof.parameters)
+        assert verifier.verify(mt, proof)
+    else:
+        print("Skipped verification")
