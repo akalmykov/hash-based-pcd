@@ -2,7 +2,7 @@ from .prover import Proof
 from .stir_parameters import FullParameters
 from .merkle import MerkleTree
 from .fiat_shamir import Blake3Sponge
-from .domain import Domain
+from .domain import Domain, EvaluationDomainConfig, Radix2EvaluationDomain
 from dataclasses import dataclass
 from typing import Any
 import galois
@@ -10,16 +10,51 @@ from enum import Enum
 from typing import Tuple
 from .prover import RoundProof
 from .pow import proof_of_work_verify
+import numpy as np
 
 
-class OracleType(Enum):
-    INITIAL = "Initial"
-    VIRTUAL = "Virtual"
+class BaseOracle:
+    def __init__(self, GF):
+        self.GF = GF
+
+    def common_factor_scale(self) -> galois.FieldArray:
+        raise NotImplementedError("This method should be overridden in subclasses.")
+
+    def get_denominators(self, query_set: list) -> list:
+        raise NotImplementedError("This method should be overridden in subclasses.")
+
+
+class InitialOracle(BaseOracle):
+    def __init__(self, GF):
+        self.GF = GF
+
+    def common_factor_scale(self) -> galois.FieldArray:
+        return self.GF(0)
+
+    def get_denominators(self, query_set: list) -> list:
+        return self.GF([1] * len(query_set))
+
+
+class VirtualOracle(InitialOracle):
+    def __init__(self, GF, comb_randomness, interpolating_polynomial, quotient_set):
+        super().__init__(GF)
+        self.comb_randomness = comb_randomness
+        self.interpolating_polynomial = interpolating_polynomial
+        self.quotient_set = quotient_set
+
+    def common_factor_scale(self):
+        return self.comb_randomness
+
+    def get_denominators(self, query_set: list) -> list:
+        return [
+            np.prod([eval_point - x for x in self.quotient_set])
+            for eval_point in query_set
+        ]
 
 
 @dataclass
 class VerificationState:
-    oracle: OracleType
+    oracle: BaseOracle
     domain_gen: galois.FieldArray
     domain_size: int
     domain_offset: galois.FieldArray
@@ -63,7 +98,7 @@ class Verifier:
         print("domain_size:", domain_size)
 
         verification_state = VerificationState(
-            oracle=OracleType.INITIAL,
+            oracle=InitialOracle(self.GF),
             domain_gen=domain_gen,
             domain_size=domain_size,
             domain_offset=self.GF(1),
@@ -124,4 +159,123 @@ class Verifier:
         stir_randomness_indexes: list,
         oracle_answers: list,
     ) -> list:
+        scaling_factor = (
+            verification_state.domain_size // self.parameters.folding_factor
+        )
+        generator = verification_state.domain_gen**scaling_factor
+        coset_offsets = [
+            verification_state.domain_offset * (verification_state.domain_gen**i)
+            for i in stir_randomness_indexes
+        ]
+        scales: list[galois.FieldArray] = []
+        scale: galois.FieldArray = self.GF(1)
+        for _ in range(self.parameters.folding_factor):
+            scales.append(scale.copy())  # otherwise, it will be a reference
+            scale *= generator
+
+        query_sets = [
+            [coset_offset * scales[j] for j in range(self.parameters.folding_factor)]
+            for coset_offset in coset_offsets
+        ]
+
+        common_factor_scale = verification_state.oracle.common_factor_scale()
+        global_common_factors = [
+            [self.GF(1) - common_factor_scale * x for x in query_set]
+            for query_set in query_sets
+        ]
+
+        global_denominators = [
+            verification_state.oracle.get_denominators(query_set)
+            for query_set in query_sets
+        ]
+        size = self.parameters.folding_factor
+        to_invert = []
+        global_common_factors_len = len(global_common_factors)
+        for common_factors in global_common_factors:
+            to_invert.extend(common_factors)
+        for denominators in global_denominators:
+            to_invert.extend(denominators)
+        to_invert.extend(coset_offsets)
+        to_invert.append(generator)
+        to_invert.append(size)
+        to_invert = self.GF(to_invert) ** -1
+
+        # Extract the inverse values
+        size_inv = to_invert[-1]
+        generator_inv = to_invert[-2]
+        coset_offsets_inv = to_invert[-len(coset_offsets) - 2 : -2]
+
+        # Extract remaining elements
+        remaining = to_invert[: -len(coset_offsets) - 2]
+
+        # Chunk into lists of size folding_factor
+        chunked = [
+            remaining[i : i + self.parameters.folding_factor]
+            for i in range(0, len(remaining), self.parameters.folding_factor)
+        ]
+
+        # Split into common_factors_inv and denominators_inv
+        common_factors_inv = chunked[:global_common_factors_len]
+        denominators_inv = chunked[global_common_factors_len:]
+
+        # Compute evaluations of answers for each coset
+        evaluations_of_ans = []
+        for coset_offset, coset_offset_inv in zip(coset_offsets, coset_offsets_inv):
+            if isinstance(verification_state.oracle, InitialOracle):
+                evaluations_of_ans.append(self.GF([1] * self.parameters.folding_factor))
+            elif isinstance(verification_state.oracle, VirtualOracle):
+                offset_pow_size = coset_offset**self.parameters.folding_factor
+
+                # Set up parameters for polynomial evaluation
+                domain_params = EvaluationDomainConfig(
+                    size=self.parameters.folding_factor,
+                    size_as_field_element=size,
+                    size_inv=size_inv,
+                    group_gen=generator,
+                    group_gen_inv=generator_inv,
+                    offset=coset_offset,
+                    offset_inv=coset_offset_inv,
+                    offset_pow_size=offset_pow_size,
+                )
+                # Evaluate the interpolating polynomial over the domain
+                virtual_function = verification_state.oracle
+                evals = Radix2EvaluationDomain.from_config(
+                    self.GF, domain_params
+                ).evaluate_poly_coeff(virtual_function.interpolating_polynomial)
+                evaluations_of_ans.append(evals)
+        scaled_offset = verification_state.domain_offset**self.parameters.folding_factor
+        folded_answers = []
+        for i, (
+            stir_randomness_index,
+            coset_offset,
+            coset_offset_inv,
+            query_set,
+            common_factors_inv,
+            denominators_inv,
+            evaluation_of_ans,
+        ) in enumerate(
+            zip(
+                stir_randomness_indexes,
+                coset_offsets,
+                coset_offsets_inv,
+                query_sets,
+                common_factors_inv,
+                denominators_inv,
+                evaluations_of_ans,
+            )
+        ):
+            stir_randomness = scaled_offset * verification_state.domain_gen ** (
+                self.parameters.folding_factor * stir_randomness_index
+            )
+            f_answers = [
+                verification_state.query(
+                    x,
+                    oracle_answers[i][j],
+                    common_factors_inv[j],
+                    denominators_inv[j],
+                    evaluation_of_ans[j],
+                )
+                for j, x in enumerate(query_set)
+            ]
+
         return []

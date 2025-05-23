@@ -4,6 +4,19 @@ from .constants import FIELD192, TEST_FIELD
 import numpy as np
 from .utils import stack_evals, is_power_of_two, next_power_of_two, get_two_adicity
 from .merkle import MerkleTree, hash_field_vector, hash_pair, serialize_field_vector
+from dataclasses import dataclass
+
+
+@dataclass
+class EvaluationDomainConfig:
+    size: int
+    size_as_field_element: object
+    size_inv: object
+    group_gen: object
+    group_gen_inv: object
+    offset: object
+    offset_inv: object
+    offset_pow_size: object
 
 
 # A function for extending a short array to a specified length:
@@ -18,7 +31,36 @@ def extendarray(short_array, length):
 
 
 class Radix2EvaluationDomain:
-    def __init__(self, GF, num_coeffs):
+    @classmethod
+    def from_config(cls, GF, config):
+        """
+        Create a Radix2EvaluationDomain instance from a configuration object.
+
+        Args:
+            GF: The Galois Field
+            config: EvaluationDomainConfig with domain parameters
+        """
+        instance = cls.__new__(cls)
+        instance.GF = GF
+
+        # Copy fields from config
+        instance.size = config.size
+        instance.size_as_field_element = config.size_as_field_element
+        instance.size_inv = config.size_inv
+        instance.group_gen = config.group_gen
+        instance.group_gen_inv = config.group_gen_inv
+        instance.offset = config.offset
+        instance.offset_inv = config.offset_inv
+        instance.offset_pow_size = config.offset_pow_size
+
+        # Compute other fields as in original constructor
+        instance.log_size = instance.size.bit_length() - 1
+        if instance.log_size > get_two_adicity(GF):
+            raise ValueError("log_size is too large")
+
+        return instance
+
+    def __init__(self, GF, num_coeffs) -> None:
         self.GF = GF
         self.size = (
             num_coeffs if is_power_of_two(num_coeffs) else next_power_of_two(num_coeffs)
@@ -38,22 +80,9 @@ class Radix2EvaluationDomain:
         self.offset = GF(1)
         self.offset_inv = GF(1)
         self.offset_pow_size = GF(1)
-        self.vandermonde_matrix = None
-        # self.vandermonde_matrix = GF.Vandermonde(self.group_gen, self.size, self.size)
-        # self.omega_pows = self.GF([self.group_gen ** (i) for i in range(self.size)])
 
     def omega_pows(self):
         return self.GF([self.offset * self.group_gen ** (i) for i in range(self.size)])
-
-    # # Method to construct evaluation matrix for the given domain
-    # def as_vandermonde_matrix(self):
-    #     self.evaluationmatrix = self.GF(
-    #         [
-    #             [self.group_gen ** (i * j) for i in range(self.size)]
-    #             for j in range(self.size)
-    #         ]
-    #     )
-    #     return self.evaluationmatrix
 
     # Method to evaluate a given polynomial over the given domain
     def evaluate_poly(self, poly):
@@ -170,8 +199,8 @@ class Domain:
     def evaluate_poly_coeff(self, poly_coeff):
         return self.domain.evaluate_poly_coeff(poly_coeff)
 
-    def as_vandermonde_matrix(self):
-        return self.domain.vandermonde_matrix
+    # def as_vandermonde_matrix(self):
+    #     return self.domain.vandermonde_matrix
 
     def gen(self):
         return self.domain.group_gen
@@ -223,8 +252,8 @@ if __name__ == "__main__":
     GF = galois.GF(17)
     print(GF.properties)
     domain = Domain(GF, 3, 2)
-    domain_matrix = domain.as_vandermonde_matrix()
-    print(domain_matrix)
+    # domain_matrix = domain.as_vandermonde_matrix()
+    # print(domain_matrix)
     print(domain.gen())
     matrix = GF(
         [
