@@ -32,7 +32,7 @@ def extendarray(short_array, length):
 
 class Radix2EvaluationDomain:
     @classmethod
-    def from_config(cls, GF, config):
+    def from_config(cls, GF, config) -> "Radix2EvaluationDomain":
         """
         Create a Radix2EvaluationDomain instance from a configuration object.
 
@@ -164,6 +164,14 @@ class Radix2EvaluationDomain:
             result *= self.offset
         return result
 
+    def elements(self):
+        cur_elem = self.offset.copy()
+        for _ in range(self.size):
+            yield cur_elem.copy() # For some reason copy is needed here
+            cur_elem *= self.group_gen
+
+
+    # Add this method temporarily to your class and test
     def __str__(self):
         return (
             f"Radix2EvaluationDomain(\n"
@@ -226,6 +234,8 @@ class Domain:
 
     def element(self, i):
         return self.domain.element(i)
+
+
 
 
 if __name__ == "__main__":

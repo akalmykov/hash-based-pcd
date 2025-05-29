@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Tuple
 from .prover import RoundProof
 from .pow import proof_of_work_verify
+from .interpolation import fft_interpolate
 import numpy as np
 
 
@@ -61,6 +62,33 @@ class VerificationState:
     root_of_unity: galois.FieldArray
     folding_randomness: galois.FieldArray
     num_round: int
+
+    def query(
+        self,
+        evaluation_point: galois.FieldArray,
+        value_of_prev_oracle: galois.FieldArray,
+        common_factors_inverse: galois.FieldArray,
+        denom_hint: galois.FieldArray,
+        ans_eval: galois.FieldArray,
+    ) -> galois.FieldArray:
+        if isinstance(self.oracle, InitialOracle):
+            return value_of_prev_oracle
+        elif isinstance(self.oracle, VirtualOracle):
+            num_terms = len(self.oracle.quotient_set)
+
+            # Compute quotient evaluation
+            quotient_evaluation = (value_of_prev_oracle - ans_eval) * denom_hint
+
+            common_factor = evaluation_point * self.oracle.comb_randomness
+
+            if common_factor != self.oracle.GF(1):
+                scale_factor = (
+                    self.oracle.GF(1) - common_factor ** (num_terms + 1)
+                ) * common_factors_inverse
+            else:
+                scale_factor = self.oracle.GF(num_terms + 1)
+
+            return quotient_evaluation * scale_factor
 
 
 class Verifier:
@@ -245,6 +273,14 @@ class Verifier:
                 evaluations_of_ans.append(evals)
         scaled_offset = verification_state.domain_offset**self.parameters.folding_factor
         folded_answers = []
+        print("stir_randomness_indexes length:", len(stir_randomness_indexes))
+        print("coset_offsets length:", len(coset_offsets))
+        print("coset_offsets_inv length:", len(coset_offsets_inv))
+        print("query_sets length:", len(query_sets))
+        print("common_factors_inv length:", len(common_factors_inv))
+        print("denominators_inv length:", len(denominators_inv))
+        print("evaluations_of_ans length:", len(evaluations_of_ans))
+
         for i, (
             stir_randomness_index,
             coset_offset,
@@ -277,5 +313,29 @@ class Verifier:
                 )
                 for j, x in enumerate(query_set)
             ]
+
+            folded_answer_poly = fft_interpolate(
+                self.GF,
+                generator,
+                coset_offset,
+                generator_inv,
+                coset_offset_inv,
+                size_inv,
+                f_answers,
+            )
+            if i == 0:
+                print("generator:", generator)
+                print("coset_offset:", coset_offset)
+                print("generator_inv:", generator_inv)
+                print("coset_offset_inv:", coset_offset_inv)
+                print("size_inv:", size_inv)
+                print("\n***** folded_answer_poly", folded_answer_poly)
+            # for x in f_answers:
+            #     print(int(x), end=",")
+
+            folded_answer_eval = folded_answer_poly(
+                verification_state.folding_randomness
+            )
+            folded_answers.append((stir_randomness, folded_answer_eval))
 
         return []
