@@ -82,7 +82,7 @@ class Prover:
         start_time = time.time()
         self.field = GF
         end_time = time.time()
-        print(f"Field init: {end_time - start_time} seconds")
+        # print(f"Field init: {end_time - start_time} seconds")
 
         self.starting_degree = 2**10  # Evaluate polynomial: 296.5279061794281 seconds
         self.stopping_degree = 2**2
@@ -108,7 +108,7 @@ class Prover:
         self.pow_bits = [self.get_pow_bits(x) for x in self.rates]
         self.repetitions = [self.calc_repetitions(x) for x in self.rates]
 
-        print("self.folding_factor", self.folding_factor)
+        # print("self.folding_factor", self.folding_factor)
         # Note, this skips the last repetition
         for i in range(self.number_of_rounds):
             self.repetitions[i] = min(
@@ -220,17 +220,17 @@ class Prover:
         pow_nonce = proof_of_work(self.sponge, self.pow_bits[round_number])
         _ = self.sponge.squeeze_f()
         queries_to_prev_ans = [self.folded_evals[i] for i in stir_randomness_indexes]
-        print("scaling_factor", scaling_factor)
+        # print("scaling_factor", scaling_factor)
         queries_to_prev_proof = self.merkle_tree.generate_multi_proof(
             stir_randomness_indexes
         )
-        print("indexes:", queries_to_prev_proof.indexes)
-        print(
-            "auth_paths_prefix_lengths:",
-            queries_to_prev_proof.auth_paths_prefix_lengths,
-        )
-        print("auth_paths_suffixes:", queries_to_prev_proof.auth_paths_suffixes)
-        print("leaf_siblings_hashes:", queries_to_prev_proof.leaf_siblings_hashes)
+        # print("indexes:", queries_to_prev_proof.indexes)
+        # print(
+        #     "auth_paths_prefix_lengths:",
+        #     queries_to_prev_proof.auth_paths_prefix_lengths,
+        # )
+        # print("auth_paths_suffixes:", queries_to_prev_proof.auth_paths_suffixes)
+        # print("leaf_siblings_hashes:", queries_to_prev_proof.leaf_siblings_hashes)
 
         queries_to_prev = (queries_to_prev_ans, queries_to_prev_proof)
         scaled_domain = self.domain.new_scaled(self.folding_factor)
@@ -261,12 +261,22 @@ class Prover:
         numerator = _g_poly_evaluator + ans_polynomial
         quotient_polynomial = numerator // vanishing_polynomial
 
+        print("comb_randomness", comb_randomness)
         scaling_poly_coeffs = [comb_randomness**i for i in range(len(quotient_set) + 1)]
+        print("scaling_poly_coeffs:[", end="")
+        for c in scaling_poly_coeffs:
+            print(c, end=", ")
+        print("]")
         scaling_polynomial = galois.Poly(
             scaling_poly_coeffs, field=self.field, order="asc"
         )
-
+        print("quotient_polynomial before scaling: [", end="")
+        for c in quotient_polynomial.coefficients(order="asc"):
+            print(c, end=", ")
+        print("]")
         self.witness_polynomial = quotient_polynomial * scaling_polynomial
+        print("quotient_polynomial after scaling:")
+        print(self.witness_polynomial)
         return (
             RoundProof(
                 g_root,

@@ -171,7 +171,7 @@ class Verifier:
             round_proof.pow_nonce,
         ):
             return (False, verification_state)
-        _ = sponge.squeeze_f()
+        shake_randomness = sponge.squeeze_f()
         # Now, for each of the selected random points, we need to compute the folding of the
         # previous oracle
 
@@ -179,7 +179,18 @@ class Verifier:
         folded_answers = self.compute_folded_evaluations(
             verification_state, stir_randomness_indexes, oracle_answers
         )
-        return (True, verification_state)
+        assert len(ood_randomness) == len(round_proof.betas)
+        quotient_answers = [(a, b) for a, b in zip(ood_randomness, round_proof.betas)]
+        quotient_answers.extend(folded_answers)
+
+        interpolating_polynomial = round_proof.ans_polynomial
+        ans_eval = interpolating_polynomial(shake_randomness)
+        shake_eval = round_proof.shake_polynomial(shake_randomness)
+        denoms = self.GF([shake_randomness - x for x, _ in quotient_answers]) ** -1
+
+        # if shake_eval !=
+
+        return True, verification_state
 
     def compute_folded_evaluations(
         self,
@@ -273,13 +284,6 @@ class Verifier:
                 evaluations_of_ans.append(evals)
         scaled_offset = verification_state.domain_offset**self.parameters.folding_factor
         folded_answers = []
-        print("stir_randomness_indexes length:", len(stir_randomness_indexes))
-        print("coset_offsets length:", len(coset_offsets))
-        print("coset_offsets_inv length:", len(coset_offsets_inv))
-        print("query_sets length:", len(query_sets))
-        print("common_factors_inv length:", len(common_factors_inv))
-        print("denominators_inv length:", len(denominators_inv))
-        print("evaluations_of_ans length:", len(evaluations_of_ans))
 
         for i, (
             stir_randomness_index,
@@ -323,19 +327,9 @@ class Verifier:
                 size_inv,
                 f_answers,
             )
-            if i == 0:
-                print("generator:", generator)
-                print("coset_offset:", coset_offset)
-                print("generator_inv:", generator_inv)
-                print("coset_offset_inv:", coset_offset_inv)
-                print("size_inv:", size_inv)
-                print("\n***** folded_answer_poly", folded_answer_poly)
-            # for x in f_answers:
-            #     print(int(x), end=",")
-
             folded_answer_eval = folded_answer_poly(
                 verification_state.folding_randomness
             )
             folded_answers.append((stir_randomness, folded_answer_eval))
 
-        return []
+        return folded_answers
