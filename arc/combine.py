@@ -20,11 +20,7 @@ def combine(f_i: List[galois.Poly], shift, x):
         [shift ** (i - gf1 + sum(d_max - d[j] for j in range(i))) for i in range(1, m)]
     )
     if x * shift == gf1:
-        result = GF(0)  # Start with zero element from the correct field
-        for i in range(m):
-            term = r[i] * f_i[i](x) * (d_max - d[i] + 1)
-            result += term
-        return result
+        return sum((r[i] * f_i[i](x) * (d_max - d[i] + 1) for i in range(m)), GF(0))
     else:
         print("gf1:", gf1)
         print("x:", x)
@@ -33,16 +29,16 @@ def combine(f_i: List[galois.Poly], shift, x):
             "(x * shift) ** (d_max - d[0] + 1):",
             gf1 - (x * shift) ** (d_max - d[0] + 1),
         )
-        result = GF(0)  # Start with zero element from the correct field
-    for i in range(m):
-        term = (
-            r[i]
-            * f_i[i](x)
-            * (gf1 - (x * shift) ** (d_max - d[i] + 1))
-            / (gf1 - x * shift)
+        return sum(
+            (
+                r[i]
+                * f_i[i](x)
+                * (gf1 - (x * shift) ** (d_max - d[i] + 1))
+                / (gf1 - x * shift)
+                for i in range(m)
+            ),
+            GF(0),
         )
-        result += term
-    return result
 
 
 if __name__ == "__main__":
