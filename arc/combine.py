@@ -1,12 +1,66 @@
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import galois
 from typing import List
 
 from stir.constants import FIELD192
+
+
+def combine_poly(f_i: List[galois.Poly], shift):
+    GF = type(shift)
+    d = [len(f) - 1 for f in f_i]
+    m = len(f_i)
+    d_max = max(d)
+    gf1 = GF(1)
+    r = [gf1]
+    r.extend(
+        [shift ** (i - gf1 + sum(d_max - d[j] for j in range(i))) for i in range(1, m)]
+    )
+
+    resulting_poly = galois.Poly.Zero(GF)
+    for i in range(m):
+        ith_poly = r[i] * f_i[i]
+        poly_sum = galois.Poly.One(GF)
+        for j in range(1, d_max - d[i] + 1):
+            poly_sum += galois.Poly([shift**j], field=GF, order="asc")
+        resulting_poly += ith_poly * poly_sum
+    return resulting_poly
+
+
+def combine_many(
+    f_i: List[galois.Poly], shift, x: galois.FieldArray
+) -> galois.FieldArray:
+    GF = type(shift)
+    d = [len(f) - 1 for f in f_i]
+    m = len(f_i)
+    d_max = max(d)
+    gf1 = GF(1)
+    r = [gf1]
+    r.extend(
+        [shift ** (i - gf1 + sum(d_max - d[j] for j in range(i))) for i in range(1, m)]
+    )
+    all_evals = []
+    for x_i in x:
+        if x_i * shift == gf1:
+            all_evals.append(
+                sum((r[i] * f_i[i](x_i) * (d_max - d[i] + 1) for i in range(m)), GF(0))
+            )
+        else:
+            all_evals.append(
+                sum(
+                    (
+                        r[i]
+                        * f_i[i](x_i)
+                        * (gf1 - (x_i * shift) ** (d_max - d[i] + 1))
+                        / (gf1 - x_i * shift)
+                        for i in range(m)
+                    ),
+                    GF(0),
+                )
+            )
+    return GF(all_evals)
 
 
 def combine(f_i: List[galois.Poly], shift, x):
@@ -41,8 +95,7 @@ def combine(f_i: List[galois.Poly], shift, x):
         )
 
 
-if __name__ == "__main__":
-
+def test_combine():
     GF = galois.GF(FIELD192)
     shifting_param = GF(1007323733327566925977802525272746789881681724570347277687)
 
@@ -126,3 +179,10 @@ if __name__ == "__main__":
     witness_eval = quotient_polynomial(test_x)
     print("witness_eval:", witness_eval)
     assert witness_eval == combined_eval
+    combined_poly = combine_poly([quotient_polynomial], shifting_param)
+    print("combined_poly:", combined_poly)
+    assert combined_poly(test_x) == witness_eval
+
+
+if __name__ == "__main__":
+    test_combine()

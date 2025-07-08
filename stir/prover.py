@@ -170,7 +170,10 @@ class Prover:
     def commit(self, witness_polynomial):
         self.witness_polynomial = witness_polynomial
         start_time = time.time()
+        print("Starting degree:", self.starting_degree)
+        print("Starting rate:", self.starting_rate)
         self.domain = Domain(self.field, self.starting_degree, self.starting_rate)
+        print("Domain size:", self.domain.size)
 
         end_time = time.time()
         print(f"Domain: {end_time - start_time} seconds")
