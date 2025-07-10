@@ -7,7 +7,6 @@ import galois
 n = 129
 GF = galois.GF(4787605948707450321761805915146316350821882368518086721537)
 
-# Pre-computed round constants as integers (taken from the original SageMath script).
 constants_int = [
     0x000000000000000000000000000000000,
     0x06382246D63A75DB1F522FA4E05CC0657,
@@ -96,6 +95,27 @@ constants_int = [
 # Convert constants to field elements.
 constants = [GF(c) for c in constants_int]
 
+# t_i = x_i + c_i + k
+# s_i = t_i^2
+# x_i+1  = s_i * t_i
+# 2 constraints per round
+
+#         [1    ]
+#         [x_i  ]
+#         [k    ]
+#    x =  [s_i  ]
+#         [x_i+1]
+#
+
+# A = [ c_i 1 1 0 0]         A * x  = [x_i + c_i + k]
+#     [ 0   0 0 1 0]                  [s_i]
+
+# B = [ c_i 1 1  0 0]         B * x  = [x_i + c_i + k]      => [x_i + c_i + k] * [x_i + c_i + k] = [s_i]
+#     [ c_i 1 1  0 0]                  [x_i + c_i + k]         [s_i] * [x_i + c_i + k] = [x_i+1]
+
+# C = [ 0 0 0 1 0]           C * x  = [s_i]
+#     [ 0 0 0 0 1]                    [x_i+1]
+
 
 def mimc_encryption(p: GF, k: GF, num_rounds: int) -> GF:
     """Encrypts a single block using the MiMC cipher in GF(2^129).
@@ -121,21 +141,61 @@ def mimc_encryption(p: GF, k: GF, num_rounds: int) -> GF:
     return state
 
 
+# Cube root exponent for the field (for decryption)
+cube_root_exp = pow(3, -1, GF.order - 1)
+
+
+def mimc_decrypt(c: GF, k: GF, num_rounds: int) -> GF:
+    """Decrypts a single block using the MiMC cipher in GF(2^129). Assumes the same constants and key as encryption.
+
+    Parameters
+    ----------
+    c : GF
+        Ciphertext element.
+    k : GF
+        Key element.
+    num_rounds : int
+        Number of MiMC rounds to invert.
+
+    Returns
+    -------
+    GF
+        The decrypted plaintext element.
+    """
+    state = c - k
+    for i in range(num_rounds - 1, 0, -1):
+        state = (state**cube_root_exp) - (k + constants[i])
+    state = (state**cube_root_exp) - (k + constants[0])
+    return state
+
+
 # Determine the number of rounds suggested by the MiMC security analysis.
 num_rounds = int(math.ceil(n / math.log2(3)))
-print(f"Number of rounds: {num_rounds}")
 
-# Secret key (chosen arbitrarily for this demonstration).
-key_int = 0x42424242424242424242424242424242
-k = GF(key_int)
-print(f"Key: {hex(int(k))}")
 
-# Random plaintext.
-# The galois library provides a Random() method for field elements.
-p = GF(0x123123123123)
+def mimc_test():
+    # Determine the number of rounds suggested by the MiMC security analysis.
+    print(f"Number of rounds: {num_rounds}")
 
-# Encrypt.
-c = mimc_encryption(p, k, num_rounds)
+    # Secret key (chosen arbitrarily for this demonstration).
+    key_int = 0x42424242424242424242424242424242
+    k = GF(key_int)
+    print(f"Key: {hex(int(k))}")
 
-print(f"Plaintext: {hex(int(p))}")
-print(f"Ciphertext: {hex(int(c))}")
+    # Random plaintext.
+    p = GF(0x123123123123)
+
+    # Encrypt.
+    c = mimc_encryption(p, k, num_rounds)
+
+    print(f"Plaintext: {hex(int(p))}")
+    print(f"Ciphertext: {hex(int(c))}")
+
+    # Decrypt.
+    p_dec = mimc_decrypt(c, k, num_rounds)
+    print(f"Decrypted: {hex(int(p_dec))}")
+    assert p == p_dec, "Decryption failed!"
+
+
+if __name__ == "__main__":
+    main()
