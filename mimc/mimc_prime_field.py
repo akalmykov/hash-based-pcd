@@ -6,43 +6,43 @@ from typing import List, Tuple
 import galois
 
 n = 54
-GF = galois.GF(2**54)
+GF = galois.GF(2**61 - 1)
 
 constants_int = [
-    "0x00000000000000",
-    "0x0c70448dac74eb",
-    "0x2d8fa917d2702e",
-    "0x180caf081b8ffc",
-    "0x07cddbc762de60",
-    "0x232e330ed56672",
-    "0x3a457b1f1a3a76",
-    "0x13114b5c97ac43",
-    "0x30fa426aa322e6",
-    "0x2d36947e76e8ae",
-    "0x3404df1c1e34a3",
-    "0x14111213211788",
-    "0x238ac981473fdc",
-    "0x1c2edf7c3929da",
-    "0x0a8ea7cecec7f2",
-    "0x0eb538580abe07",
-    "0x3504bafd32cb59",
-    "0x313994a440abd9",
-    "0x3ac1897ff10c25",
-    "0x14064cf5b24c3a",
-    "0x1405dde1e25dea",
-    "0x34a941ccdb3e1f",
-    "0x0545f3cb375a96",
-    "0x3e343bec16d618",
-    "0x0fdeeb75b576d1",
-    "0x1c21d7ca27cb70",
-    "0x33393b5927515e",
-    "0x144463a9ef58ed",
-    "0x03d8c85512b766",
-    "0x276649d462da27",
-    "0x3b4e7f8827009b",
-    "0x2a985fd2deb972",
-    "0x15a2a827c19cb1",
-    "0x1e465461aecdd6",
+    "0x00",
+    "0x0c",
+    "0x2d",
+    "0x18",
+    "0x07",
+    "0x23",
+    "0x3a",
+    "0x13",
+    "0x30",
+    "0x2d",
+    "0x34",
+    "0x14",
+    "0x23",
+    "0x1c",
+    "0x0a",
+    "0x0e",
+    "0x35",
+    "0x31",
+    "0x3a",
+    "0x14",
+    "0x14",
+    "0x34",
+    "0x05",
+    "0x3e",
+    "0x0f",
+    "0x1c",
+    "0x33",
+    "0x14",
+    "0x03",
+    "0x27",
+    "0x3b",
+    "0x2a",
+    "0x15",
+    "0x1e",
 ]
 
 # Convert constants to field elements.
@@ -264,12 +264,12 @@ def mimc_test() -> None:
     print(f"Number of rounds: {num_rounds}")
 
     # Secret key (chosen arbitrarily for this demonstration).
-    key_int = 0x42424
+    key_int = 0x42
     k = GF(key_int)
     print(f"Key: {hex(int(k))}")
 
     # Example plaintext.
-    p = GF(0x123)
+    p = GF(0x12)
 
     # Encrypt (also obtains R1CS, which we ignore here).
     ciphertext, *_ = mimc_encryption(p, k, num_rounds)
@@ -314,6 +314,27 @@ def r1cs_test() -> None:
         right = _dot(rowB, witness)
         out = _dot(rowC, witness)
         assert left * right == out, f"Constraint {idx} failed"
+
+    Ax = GF(A) @ GF(witness)
+    Bx = GF(B) @ GF(witness)
+    Cx = GF(C) @ GF(witness)
+    import numpy as np
+
+    print(witness)
+    hadamard = np.multiply(Ax, Bx)
+    assert np.array_equal(hadamard, Cx), f"Matrix R1CS check failed: {hadamard} != {Cx}"
+
+    # # Matrix multiplication
+    # Ax = A @ witness
+    # Bx = B @ witness
+    # Cx = C @ witness
+
+    # # Hadamard product (element-wise multiplication)
+    # hadamard = np.multiply(Ax, Bx)
+
+    # # Verify R1CS constraint: (A·witness) ⊙ (B·witness) = C·witness
+    # assert np.array_equal(hadamard, Cx), f"Matrix R1CS check failed: {hadamard} != {Cx}"
+    # print("Matrix-based R1CS check passed!")
 
     print("All constraints satisfied.")
     serialize_r1cs_to_json(A, B, C, witness, "mimc_r1cs.json")
