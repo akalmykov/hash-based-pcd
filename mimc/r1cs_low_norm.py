@@ -6,7 +6,7 @@
 #     "C": [[int, int, ...], [int, int, ...], ...], # constraint matrix C
 #     "witness": [int, int, ...] # witness vector
 # }
-# transform_r1cs_to_low_norm is a generic function that can be used to transform the R1CS constraint and witness to low norm.
+# This is a generic function that can be used to transform the R1CS constraint and witness to low norm.
 # It takes two arguments:
 # - q: the field size of the R1CS constraint and witness.
 # - norm_bound: the norm bound of the R1CS constraint and witness. constraints and witness are bounded by norm_bound.
@@ -20,7 +20,6 @@
 
 import math
 import json
-import numpy as np
 
 
 # -----------------------------------------------------------------------------
@@ -311,23 +310,30 @@ def transform_r1cs_to_low_norm(A, B, C, w, q, norm_bound):
     # ------------------------------------------------------------------
     # 3. Constraint transformation – row by row
     # ------------------------------------------------------------------
-    num_constraints = A.shape[0]
-    assert num_constraints == B.shape[0] == C.shape[0]
+    num_constraints = len(A)
+    assert num_constraints == len(B) == len(C)
 
     for k in range(num_constraints):
         # Decompose *coefficients* ≥ bound (they are constants, so we keep them
         # as values for now).  Coefficients < bound stay single limb.
+        rowA = A[k]
+        rowB = B[k]
+        rowC = C[k]
+
         a_k_limbs = {
-            j: ([A[k, j]] if A[k, j] < norm_bound else decompose(A[k, j], norm_bound))
-            for j in A[k].nonzero()[0]
+            j: ([coeff] if coeff < norm_bound else decompose(coeff, norm_bound))
+            for j, coeff in enumerate(rowA)
+            if coeff
         }
         b_k_limbs = {
-            j: ([B[k, j]] if B[k, j] < norm_bound else decompose(B[k, j], norm_bound))
-            for j in B[k].nonzero()[0]
+            j: ([coeff] if coeff < norm_bound else decompose(coeff, norm_bound))
+            for j, coeff in enumerate(rowB)
+            if coeff
         }
         c_k_limbs = {
-            j: ([C[k, j]] if C[k, j] < norm_bound else decompose(C[k, j], norm_bound))
-            for j in C[k].nonzero()[0]
+            j: ([coeff] if coeff < norm_bound else decompose(coeff, norm_bound))
+            for j, coeff in enumerate(rowC)
+            if coeff
         }
 
         # Build limb representation of the dot products
@@ -380,14 +386,6 @@ def _dot_row(row, witness, q):
     if isinstance(row, dict):
         return sum(int(coeff) * int(witness[idx]) for idx, coeff in row.items()) % q
 
-    # NumPy ndarray ---------------------------------------------------------
-    import numpy as _np  # local import to avoid mandatory dependency at file import time
-
-    if isinstance(row, _np.ndarray):
-        # Quickly extract the non-zero indices to avoid a full scan of large rows.
-        nz_idx = row.nonzero()[0]
-        return sum(int(row[i]) * int(witness[i]) for i in nz_idx) % q
-
     # Generic sequence (e.g. Python list) ----------------------------------
     return sum(int(coeff) * int(witness[i]) for i, coeff in enumerate(row) if coeff) % q
 
@@ -418,10 +416,10 @@ if __name__ == "__main__":
 
     with open("mimc_r1cs.json", "r") as f:
         data = json.load(f)
-        A = np.array([[int(x, 16) for x in row] for row in data["A"]])
-        B = np.array([[int(x, 16) for x in row] for row in data["B"]])
-        C = np.array([[int(x, 16) for x in row] for row in data["C"]])
-        witness = np.array([int(x, 16) for x in data["witness"]])
+        A = [[int(x, 16) for x in row] for row in data["A"]]
+        B = [[int(x, 16) for x in row] for row in data["B"]]
+        C = [[int(x, 16) for x in row] for row in data["C"]]
+        witness = [int(x, 16) for x in data["witness"]]
 
     verify_r1cs_constraints(A, B, C, witness, q)
     A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, norm_bound)
@@ -432,10 +430,10 @@ if __name__ == "__main__":
     print("#witness variables:", len(w_p))
     # simple multiplication test
 
-    witness = np.array([1, 2**55, 3, 3 * 2**55])
-    A = np.array([[0, 1, 0, 0]])
-    B = np.array([[0, 0, 1, 0]])
-    C = np.array([[0, 0, 0, 1]])
+    witness = [1, 2**55, 3, 3 * 2**55]
+    A = [[0, 1, 0, 0]]
+    B = [[0, 0, 1, 0]]
+    C = [[0, 0, 0, 1]]
     verify_r1cs_constraints(A, B, C, witness, q)
     A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, norm_bound)
     verify_r1cs_constraints(
@@ -454,10 +452,10 @@ if __name__ == "__main__":
     b = 2**60 - 45678  # ≥ norm_bound, triggers decomposition
     prod = (a * b) % q
 
-    witness2 = np.array([1, a, b, prod], dtype=object)
-    A2 = np.array([[0, 1, 0, 0]], dtype=object)
-    B2 = np.array([[0, 0, 1, 0]], dtype=object)
-    C2 = np.array([[0, 0, 0, 1]], dtype=object)
+    witness2 = [1, a, b, prod]
+    A2 = [[0, 1, 0, 0]]
+    B2 = [[0, 0, 1, 0]]
+    C2 = [[0, 0, 0, 1]]
 
     verify_r1cs_constraints(A2, B2, C2, witness2, q)
     A2_p, B2_p, C2_p, w2_p = transform_r1cs_to_low_norm(
@@ -476,12 +474,12 @@ if __name__ == "__main__":
     x = 2**60 - 987  # witness value ≥ norm_bound
     y = (big_coeff * x) % q
 
-    witness3 = np.array([1, x, y], dtype=object)
+    witness3 = [1, x, y]
 
     # A row applies big_coeff to x, B row multiplies by constant wire 1, C row expects the product
-    A3 = np.array([[0, big_coeff, 0]], dtype=object)  # coef on x
-    B3 = np.array([[1, 0, 0]], dtype=object)  # constant 1 (wire 0)
-    C3 = np.array([[0, 0, 1]], dtype=object)  # coef on y
+    A3 = [[0, big_coeff, 0]]  # coef on x
+    B3 = [[1, 0, 0]]  # constant 1 (wire 0)
+    C3 = [[0, 0, 1]]  # coef on y
 
     verify_r1cs_constraints(A3, B3, C3, witness3, q)
     A3_p, B3_p, C3_p, w3_p = transform_r1cs_to_low_norm(
