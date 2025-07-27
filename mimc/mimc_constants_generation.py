@@ -73,7 +73,8 @@ def grain_random_bits(num_bits):
 
 def gen_constants():
     # Round constants for GF(2^n)
-    num_rounds = math.ceil(n // math.log(3, 2))
+    # num_rounds = math.ceil(n // math.log(3, 2))
+    num_rounds = 54
     round_constants = [0x0]
     for i in range(1, num_rounds):
         random_int = grain_random_bits(n)
@@ -82,3 +83,5 @@ def gen_constants():
     print("Round constants for GF(2^n):")
     hex_length = int(math.ceil(float(n) / 4)) + 2  # +2 for "0x"
     print(["{0:#0{1}x}".format(entry, hex_length) for entry in round_constants])
+    for c in round_constants:
+        assert c < 2**n - 1

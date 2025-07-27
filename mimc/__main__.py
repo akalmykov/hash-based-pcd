@@ -2,7 +2,7 @@ import argparse
 
 from .mimc_prime_field import mimc_main
 
-# from .mimc_constants_generation import gen_constants
+from .mimc_constants_generation import gen_constants
 
 
 def main():
