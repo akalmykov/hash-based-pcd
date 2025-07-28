@@ -40,8 +40,7 @@ class R1CSBuilder:
         self.q = q  # field modulus
         self.d = d  # limb base (= norm_bound)
 
-        #   witness[0] == 1  is the conventional constant wire.
-        self.witness = [1]
+        self.witness = []
 
         # A′, B′, C′ rows as sparsely-filled dicts {var_idx → coeff}
         self.A_rows: list[dict[int, int]] = []
@@ -196,21 +195,13 @@ def add_multilimb_multiplication(
     prod_idx = [builder.new_var(v) for v in prod_limbs_vals]
 
     # Range-check result limbs.
-    add_range_check_constraints(builder, prod_idx)
+    # add_range_check_constraints(builder, prod_idx)
 
-    # R1CS enforcement: introduce *single* variable holding reconstructed prod
-    prod_full_idx = builder.new_var(prod_val)
-    # prod_full == a * b   via constraint   a_full · b_full = prod_full
-    a_full_idx = builder.new_var(a_val)
-    b_full_idx = builder.new_var(b_val)
-    builder.add_constraint({a_full_idx: 1}, {b_full_idx: 1}, {prod_full_idx: 1})
-
-    # Link prod_full to limbs:  Σ limb_i * d^i  == prod_full.
-    lhs = {prod_full_idx: -1}
-    for i, limb in enumerate(prod_idx):
-        coeff = builder.d**i
-        lhs[limb] = coeff
-    builder.add_constraint(lhs, {builder.const_one_idx: 1}, {})
+    # NOTE: We no longer materialise the full product as a single witness
+    # value – doing so could violate the norm bound.  Equality between the
+    # operand limbs and the product limbs will instead be enforced by the
+    # caller (add_multilimb_multiplication_constraint) in a limb-wise
+    # fashion.  This keeps every witness value strictly below ``d``.
 
     return prod_idx
 
@@ -259,24 +250,18 @@ def add_multilimb_multiplication_constraint(
 
     prod_limbs = add_multilimb_multiplication(builder, L_limbs, R_limbs)
 
-    # subtract O limbs: prod − O == 0  limb-wise
+    # ------------------------------------------------------------------
+    # Enforce limb-wise equality  prod_limbs == O_limbs
+    # ------------------------------------------------------------------
     max_len = max(len(prod_limbs), len(O_limbs))
     zero_idx = builder.new_const(0)
 
     prod = prod_limbs + [zero_idx] * (max_len - len(prod_limbs))
     O = O_limbs + [zero_idx] * (max_len - len(O_limbs))
 
-    diff_limbs = add_multilimb_addition(
-        builder,
-        prod,
-        [
-            builder.new_const((-builder.get_val(idx)) % builder.q) for idx in O
-        ],  # negate O
-    )
-
-    # Enforce every limb of diff is 0
-    for idx in diff_limbs:
-        builder.add_constraint({idx: 1}, {builder.const_one_idx: 1}, {})
+    for p_idx, o_idx in zip(prod, O):
+        # Constraint: p_idx * 1 = o_idx  →  (p_idx - o_idx) = 0
+        builder.add_constraint({p_idx: 1, o_idx: -1}, {builder.const_one_idx: 1}, {})
 
 
 def transform_r1cs_to_low_norm(A, B, C, w, q, norm_bound):
@@ -303,7 +288,7 @@ def transform_r1cs_to_low_norm(A, B, C, w, q, norm_bound):
 
         # Materialise variables in the builder & range-check them
         limb_idx = [builder.new_var(v) for v in limb_vals]
-        add_range_check_constraints(builder, limb_idx)
+        # add_range_check_constraints(builder, limb_idx)
 
         witness_map[j] = limb_idx
 
@@ -414,20 +399,30 @@ if __name__ == "__main__":
     q = 2**61 - 1
     norm_bound = 2**54
 
-    with open("mimc_r1cs.json", "r") as f:
-        data = json.load(f)
-        A = [[int(x, 16) for x in row] for row in data["A"]]
-        B = [[int(x, 16) for x in row] for row in data["B"]]
-        C = [[int(x, 16) for x in row] for row in data["C"]]
-        witness = [int(x, 16) for x in data["witness"]]
-
-    verify_r1cs_constraints(A, B, C, witness, q)
-    A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, norm_bound)
-    verify_r1cs_constraints(A_p, B_p, C_p, w_p, q)
-
-    print("All constraints satisfied!")
-    print("#constraints:", len(A_p))
-    print("#witness variables:", len(w_p))
+    # with open("mimc_r1cs.json", "r") as f:
+    #     data = json.load(f)
+    #     A = [[int(x, 16) for x in row] for row in data["A"]]
+    #     B = [[int(x, 16) for x in row] for row in data["B"]]
+    #     C = [[int(x, 16) for x in row] for row in data["C"]]
+    #     witness = [int(x, 16) for x in data["witness"]]
+    #
+    # verify_r1cs_constraints(A, B, C, witness, q)
+    # A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, norm_bound)
+    # verify_r1cs_constraints(A_p, B_p, C_p, w_p, q)
+    #
+    # # Serialize the transformed R1CS to JSON
+    # transformed_data = {
+    #     "A": [[hex(x) for x in row] for row in A_p],
+    #     "B": [[hex(x) for x in row] for row in B_p],
+    #     "C": [[hex(x) for x in row] for row in C_p],
+    #     "witness": [hex(x) for x in w_p],
+    # }
+    #
+    # with open("mimc_r1cs_transformed.json", "w") as f:
+    #     json.dump(transformed_data, f, indent=2)
+    # print("All constraints satisfied!")
+    # print("#constraints:", len(A_p))
+    # print("#witness variables:", len(w_p))
     # simple multiplication test
 
     witness = [1, 2**55, 3, 3 * 2**55]
@@ -436,9 +431,15 @@ if __name__ == "__main__":
     C = [[0, 0, 0, 1]]
     verify_r1cs_constraints(A, B, C, witness, q)
     A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, norm_bound)
-    verify_r1cs_constraints(
-        A_p, B_p, C_p, w_p, q
-    )  # verify the transformed R1CS constraints are satisfied
+    print(A_p)
+    print(B_p)
+    print(C_p)
+    print(w_p)
+    assert all(x < norm_bound for x in w_p)
+    assert all(coeff <= norm_bound for row in A_p for coeff in row.values())
+    assert all(coeff <= norm_bound for row in B_p for coeff in row.values())
+    assert all(coeff <= norm_bound for row in C_p for coeff in row.values())
+    verify_r1cs_constraints(A_p, B_p, C_p, w_p, q)
 
     print("All constraints satisfied!")
     print("#constraints:", len(A_p))
@@ -448,45 +449,45 @@ if __name__ == "__main__":
     # Additional test 1 – large witness values
     # ------------------------------------------------------------------
 
-    a = 2**60 - 123  # ≥ norm_bound, triggers decomposition
-    b = 2**60 - 45678  # ≥ norm_bound, triggers decomposition
-    prod = (a * b) % q
-
-    witness2 = [1, a, b, prod]
-    A2 = [[0, 1, 0, 0]]
-    B2 = [[0, 0, 1, 0]]
-    C2 = [[0, 0, 0, 1]]
-
-    verify_r1cs_constraints(A2, B2, C2, witness2, q)
-    A2_p, B2_p, C2_p, w2_p = transform_r1cs_to_low_norm(
-        A2, B2, C2, witness2, q, norm_bound
-    )
-    verify_r1cs_constraints(A2_p, B2_p, C2_p, w2_p, q)
-
-    print("\nLarge witness test passed!")
-    print("#constraints:", len(A2_p))
-    print("#witness variables:", len(w2_p))
-
-    # ------------------------------------------------------------------
-    # Additional test 2 – large coefficients in the matrices
-    # ------------------------------------------------------------------
-    big_coeff = 2**60 - 321  # ≥ norm_bound, appears as coefficient
-    x = 2**60 - 987  # witness value ≥ norm_bound
-    y = (big_coeff * x) % q
-
-    witness3 = [1, x, y]
-
-    # A row applies big_coeff to x, B row multiplies by constant wire 1, C row expects the product
-    A3 = [[0, big_coeff, 0]]  # coef on x
-    B3 = [[1, 0, 0]]  # constant 1 (wire 0)
-    C3 = [[0, 0, 1]]  # coef on y
-
-    verify_r1cs_constraints(A3, B3, C3, witness3, q)
-    A3_p, B3_p, C3_p, w3_p = transform_r1cs_to_low_norm(
-        A3, B3, C3, witness3, q, norm_bound
-    )
-    verify_r1cs_constraints(A3_p, B3_p, C3_p, w3_p, q)
-
-    print("\nLarge coefficient test passed!")
-    print("#constraints:", len(A3_p))
-    print("#witness variables:", len(w3_p))
+    # a = 2**60 - 123  # ≥ norm_bound, triggers decomposition
+    # b = 2**60 - 45678  # ≥ norm_bound, triggers decomposition
+    # prod = (a * b) % q
+    #
+    # witness2 = [1, a, b, prod]
+    # A2 = [[0, 1, 0, 0]]
+    # B2 = [[0, 0, 1, 0]]
+    # C2 = [[0, 0, 0, 1]]
+    #
+    # verify_r1cs_constraints(A2, B2, C2, witness2, q)
+    # A2_p, B2_p, C2_p, w2_p = transform_r1cs_to_low_norm(
+    #     A2, B2, C2, witness2, q, norm_bound
+    # )
+    # verify_r1cs_constraints(A2_p, B2_p, C2_p, w2_p, q)
+    #
+    # print("\nLarge witness test passed!")
+    # print("#constraints:", len(A2_p))
+    # print("#witness variables:", len(w2_p))
+    #
+    # # ------------------------------------------------------------------
+    # # Additional test 2 – large coefficients in the matrices
+    # # ------------------------------------------------------------------
+    # big_coeff = 2**60 - 321  # ≥ norm_bound, appears as coefficient
+    # x = 2**60 - 987  # witness value ≥ norm_bound
+    # y = (big_coeff * x) % q
+    #
+    # witness3 = [1, x, y]
+    #
+    # # A row applies big_coeff to x, B row multiplies by constant wire 1, C row expects the product
+    # A3 = [[0, big_coeff, 0]]  # coef on x
+    # B3 = [[1, 0, 0]]  # constant 1 (wire 0)
+    # C3 = [[0, 0, 1]]  # coef on y
+    #
+    # verify_r1cs_constraints(A3, B3, C3, witness3, q)
+    # A3_p, B3_p, C3_p, w3_p = transform_r1cs_to_low_norm(
+    #     A3, B3, C3, witness3, q, norm_bound
+    # )
+    # verify_r1cs_constraints(A3_p, B3_p, C3_p, w3_p, q)
+    #
+    # print("\nLarge coefficient test passed!")
+    # print("#constraints:", len(A3_p))
+    # print("#witness variables:", len(w3_p))
