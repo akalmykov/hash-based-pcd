@@ -157,9 +157,6 @@ def add_multilimb_addition(
             {},
         )
 
-        # range-check the two fresh limbs
-        add_range_check_constraints(builder, [p_idx, carry_idx])
-
         result.append(p_idx)
 
     # Final carry (if non-zero)
@@ -183,27 +180,89 @@ def add_multilimb_multiplication(
 ) -> list[int]:
     """Multiply two multi-limb numbers and return limb indices of the product."""
 
-    # Strategy for prototype simplicity: 1) compute the integer product in
-    # Python, 2) decompose, 3) introduce all needed constraints linking the
-    # operands and the result via a single R1CS multiplication + equality.
+    # For multi-limb multiplication A * B = P, we need to:
+    # 1. Compute all cross-products a_i * b_j
+    # 2. Group by position (i+j) and handle carries
+    # 3. Add R1CS constraints for each multiplication and carry operation
 
-    a_val = _recompose(builder, a_limbs)
-    b_val = _recompose(builder, b_limbs)
-    prod_val = (a_val * b_val) % builder.q
+    len_a, len_b = len(a_limbs), len(b_limbs)
+    max_result_len = len_a + len_b
 
-    prod_limbs_vals = decompose(prod_val, builder.d)
-    prod_idx = [builder.new_var(v) for v in prod_limbs_vals]
+    # Initialize partial sums for each result position
+    partial_sums: list[list[int]] = [[] for _ in range(max_result_len)]
 
-    # Range-check result limbs.
-    # add_range_check_constraints(builder, prod_idx)
+    # Step 1: Compute all cross-products a_i * b_j and group by position
+    for i in range(len_a):
+        for j in range(len_b):
+            # Cross-product a_i * b_j contributes to position i+j
+            pos = i + j
 
-    # NOTE: We no longer materialise the full product as a single witness
-    # value – doing so could violate the norm bound.  Equality between the
-    # operand limbs and the product limbs will instead be enforced by the
-    # caller (add_multilimb_multiplication_constraint) in a limb-wise
-    # fashion.  This keeps every witness value strictly below ``d``.
+            # Create constraint: a_i * b_j = cross_product_var
+            a_i, b_j = a_limbs[i], b_limbs[j]
+            cross_val = (builder.get_val(a_i) * builder.get_val(b_j)) % builder.q
+            cross_idx = builder.new_var(cross_val)
 
-    return prod_idx
+            # Add R1CS constraint: a_i * b_j = cross_product_var
+            builder.add_constraint({a_i: 1}, {b_j: 1}, {cross_idx: 1})
+
+            partial_sums[pos].append(cross_idx)
+
+    # Step 2: Sum partial products and handle carries for each position
+    zero_idx = builder.new_const(0)
+    carry_idx = zero_idx
+    result_limbs: list[int] = []
+
+    for pos in range(max_result_len):
+        # Sum all cross-products for this position plus carry from previous
+        terms = partial_sums[pos] + (
+            [carry_idx] if builder.get_val(carry_idx) != 0 else []
+        )
+
+        if not terms:
+            # No terms for this position
+            result_limbs.append(zero_idx)
+            carry_idx = zero_idx
+            continue
+
+        # Sum all terms for this position
+        sum_idx = terms[0]
+        for term_idx in terms[1:]:
+            # Create sum: sum_idx + term_idx = new_sum_idx
+            new_sum_val = (
+                builder.get_val(sum_idx) + builder.get_val(term_idx)
+            ) % builder.q
+            new_sum_idx = builder.new_var(new_sum_val)
+
+            # Add constraint: sum_idx + term_idx - new_sum_idx = 0
+            builder.add_constraint(
+                {sum_idx: 1, term_idx: 1, new_sum_idx: -1},
+                {builder.const_one_idx: 1},
+                {},
+            )
+            sum_idx = new_sum_idx
+
+        # Decompose sum into result limb + carry: sum = result + carry * d
+        sum_val = builder.get_val(sum_idx)
+        result_val = sum_val % builder.d
+        new_carry_val = sum_val // builder.d
+
+        result_idx = builder.new_var(result_val)
+        carry_idx = builder.new_var(new_carry_val)
+
+        # Add constraint: carry * d + result - sum = 0
+        builder.add_constraint(
+            {carry_idx: builder.d, result_idx: 1, sum_idx: -1},
+            {builder.const_one_idx: 1},
+            {},
+        )
+
+        result_limbs.append(result_idx)
+
+    # Remove trailing zero limbs
+    while len(result_limbs) > 1 and builder.get_val(result_limbs[-1]) == 0:
+        result_limbs.pop()
+
+    return result_limbs
 
 
 def add_multilimb_dot_product(
@@ -394,6 +453,42 @@ def verify_r1cs_constraints(A_rows, B_rows, C_rows, witness, q):
             )
 
 
+def _sparse_rows_to_dense(rows: list[dict[int, int]], num_cols: int) -> list[list[int]]:
+    dense_rows: list[list[int]] = []
+    for row in rows:
+        dense = [0] * num_cols
+        for j, coeff in row.items():
+            dense[j] = int(coeff)
+        dense_rows.append(dense)
+
+    return dense_rows
+
+
+def print_dense_r1cs(
+    A: list[dict[int, int]],
+    B: list[dict[int, int]],
+    C: list[dict[int, int]],
+    witness: list[int],
+) -> None:
+    num_cols = len(witness)
+
+    A_dense = _sparse_rows_to_dense(A, num_cols)
+    B_dense = _sparse_rows_to_dense(B, num_cols)
+    C_dense = _sparse_rows_to_dense(C, num_cols)
+
+    print("Dense A matrix:")
+    for row in A_dense:
+        print(row)
+
+    print("\nDense B matrix:")
+    for row in B_dense:
+        print(row)
+
+    print("\nDense C matrix:")
+    for row in C_dense:
+        print(row)
+
+
 if __name__ == "__main__":
 
     q = 2**61 - 1
@@ -425,16 +520,17 @@ if __name__ == "__main__":
     # print("#witness variables:", len(w_p))
     # simple multiplication test
 
-    witness = [1, 2**55, 3, 3 * 2**55]
-    A = [[0, 1, 0, 0]]
-    B = [[0, 0, 1, 0]]
+    witness = [1, 2**55, 3, 3 * 5 * 7 * 2**55]
+    A = [[0, 5, 0, 0]]
+    B = [[0, 0, 7, 0]]
     C = [[0, 0, 0, 1]]
     verify_r1cs_constraints(A, B, C, witness, q)
     A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, norm_bound)
-    print(A_p)
-    print(B_p)
-    print(C_p)
-    print(w_p)
+    print("w_p:", w_p)
+    print("A_p:", A_p)
+    print("B_p:", B_p)
+    print("C_p:", C_p)
+    print_dense_r1cs(A_p, B_p, C_p, w_p)
     assert all(x < norm_bound for x in w_p)
     assert all(coeff <= norm_bound for row in A_p for coeff in row.values())
     assert all(coeff <= norm_bound for row in B_p for coeff in row.values())

@@ -1,0 +1,58 @@
+R1CS constraint and witness is calculated in the Mersenne 61 prime field F_q, where q = 2^61 - 1.
+
+We need a generic function that can be used to transform the R1CS constraint and witness to low norm.
+It takes two arguments:
+- q: the field size of the R1CS constraint and witness.
+- b: the norm bound of the R1CS constraint and witness. constraints and witness are bounded by norm_bound.
+
+It returns the transformed R1CS constraint and witness.
+The test case is to bound the norm of the R1CS constraint and witness to 2^54.
+This means that all values in the R1CS constraint and the witness must be less than 2^54,
+In other words, given A,B,C, w, the algorithm should find a new A', B', C', w' such that
+1. A' * w' \hardamand B' * w' =  C' * w'
+2. The l-inf norm of A', B', C' is less than norm_bound.
+
+The first attempt:
+
+witness = [1, 2**55, 3, 3 * 2**55]
+A = [[0, 1, 0, 0]]
+B = [[0, 0, 1, 0]]
+C = [[0, 0, 0, 1]]
+
+b=2^54
+2^55 = [0*b^0, 2*b^1]
+
+w'=[1, 0, 2, 3, 0, 6]
+witness_map = {0: [0], 1: [1, 2], 2: [3], 3: [4, 5]}
+
+A' = [[0, 1*b^0, 1*b^1, 0, 0, 0]]
+B' = [[0, 0, 1, 0, 0, 0]]
+C' = [[0, 0, 0, 0, 1*b^0, 1*b^1]]
+
+but this won't work for arbitrary b since further decomposition would give higher degrees of b
+b^2, b^3,... and this would violate the bound
+
+we can come up with a b' < b, such that a decomposition 
+for the largest element in the R1CS is possible without violating the bound b
+i.e. the largest element in the R1CS is decomposed in base b' with
+largest element of this decomposition (b')**k < b
+
+another approach is to fully switch to b-base and do not introduce it 
+anywhere in the constraints/witness
+
+witness = [1, 2**55, 3, 3 * 2**55]
+A = [[0, 1, 0, 0]]
+B = [[0, 0, 1, 0]]
+C = [[0, 0, 0, 1]]
+
+b=2^54
+2^55 = [0*b^0, 2*b^1]
+
+w'=[1, 0, 2, 3, 0, 6]
+witness_map = {0: [0], 1: [1, 2], 2: [3], 3: [4, 5]}
+
+A' = [[0, 1, 1, 0, 0, 0]]
+B' = [[0, 0, 1, 0, 0, 0]]
+C' = [[0, 0, 0, 0, 1, 1]]
+
+however would this be sound?
