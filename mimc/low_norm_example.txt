@@ -20,6 +20,10 @@ B = [[0, 0, 1, 0]]
 C = [[0, 0, 0, 1]]
 
 b=2^54
+
+6 * 2**55 = 0*(2^54)^0 + 6*(2^54)^1 + ...
+0*(2^54)^0 + 6*(2^54)^1 + 7*(2^54)^2...
+
 2^55 = [0*b^0, 2*b^1]
 
 w'=[1, 0, 2, 3, 0, 6]
@@ -56,3 +60,39 @@ B' = [[0, 0, 1, 0, 0, 0]]
 C' = [[0, 0, 0, 0, 1, 1]]
 
 however would this be sound?
+
+
+Let:
+m = original number of constraints (rows)
+n = original number of witness variables (columns)
+q = field size
+d = norm bound
+L = ⌈log_d(q)⌉ = maximum limbs needed for any value
+k = maximum number of non-zero coefficients per constraint row
+
+columns: n' = n × L + O(m × k × L^2)
+Original witness decomposition: n × L variables
+Intermediate computation variables: O(m × k × L^2) variables per constraint
+
+rows
+m' = O(m × k × L^2 × (L + k))
+Breakdown per original constraint:
+Dot product computation: k × L^2 multiplication constraints (coefficient × witness limbs)
+Dot product accumulation: O(k × L) addition constraints
+Final multiplication: O(L^2 × L^2) = O(L^4) constraints for (A·w) × (B·w)
+Equality enforcement: O(L^2) constraints
+
+Operation	Input Sizes	Constraint Count
+Multi-limb addition	L_a + L_b limbs	2 × max(L_a, L_b)
+Multi-limb multiplication	L_a × L_b limbs	O(L_a × L_b)
+Dot product	k terms, L limbs each	O(k × L^2)
+
+
+For large circuits with dense constraints:
+Column blowup: O(L) factor
+Row blowup: O(k × L^4) factor per constraint
+Since L = O(log_d(q)) and typically k ≤ n, the overall system grows from m × n to approximately:
+
+
+Overall:
+m' × n' = O(m × k × L^4) × O(n × L) = O(m × n × k × L^5)
