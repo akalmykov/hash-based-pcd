@@ -323,8 +323,8 @@ def r1cs_test() -> None:
     print("\n[ R1CS 1-round self-test ]")
 
     # Fixed key and plaintext for reproducibility.
-    k = GF(0x4242)
-    p = GF(0x123)
+    k = GF(0x231)
+    p = GF(0x56)
 
     ciphertext, A, B, C, witness = mimc_encryption(p, k, num_rounds)
     # print_r1cs_matrices(A, B, C, witness)
@@ -358,7 +358,7 @@ def r1cs_test() -> None:
     # print("Matrix-based R1CS check passed!")
 
     print("All constraints satisfied.")
-    serialize_r1cs_to_json(A, B, C, witness, "mimc_r1cs.json")
+    serialize_r1cs_to_json(A, B, C, witness, "mimc_r1cs_2.json")
 
 
 def serialize_r1cs_to_json(

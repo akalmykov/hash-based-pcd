@@ -369,16 +369,19 @@ def transform_r1cs_to_low_norm(A, B, C, w, q, norm_bound):
             for j, coeff in enumerate(rowA)
             if coeff
         }
+        print("a_k_limbs", a_k_limbs)
         b_k_limbs = {
             j: ([coeff] if coeff < norm_bound else decompose(coeff, norm_bound))
             for j, coeff in enumerate(rowB)
             if coeff
         }
+        print("b_k_limbs", b_k_limbs)
         c_k_limbs = {
             j: ([coeff] if coeff < norm_bound else decompose(coeff, norm_bound))
             for j, coeff in enumerate(rowC)
             if coeff
         }
+        print("c_k_limbs", c_k_limbs)
 
         # Build limb representation of the dot products
         L_limbs = add_multilimb_dot_product(builder, a_k_limbs, witness_map)
@@ -386,7 +389,7 @@ def transform_r1cs_to_low_norm(A, B, C, w, q, norm_bound):
         O_limbs = add_multilimb_dot_product(builder, c_k_limbs, witness_map)
 
         # Enforce multiplication equality
-        add_multilimb_multiplication_constraint(builder, L_limbs, R_limbs, O_limbs)
+        # add_multilimb_multiplication_constraint(builder, L_limbs, R_limbs, O_limbs)
 
     # ------------------------------------------------------------------
     # 4. Export the new system
