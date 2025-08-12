@@ -17,6 +17,35 @@
 # In other words, given A,B,C, w, the algorithm should find a new A', B', C', w' such that:
 # 1. A' * w' \hardamand B' * w' =  C' * w'
 # 2. The norm of A', B', C' is less than norm_bound.
+# The algorithm is as follows:
+
+# witness = [1, 2**55, 3, 3 * 2**55]
+# A = [[0, 1, 0, 0]]
+# B = [[0, 0, 1, 0]]
+# C = [[0, 0, 0, 1]]
+
+# d=2^54
+
+# 6 * 2**55 = 0*(2^54)^0 + 6*(2^54)^1 + ...
+# 0*(2^54)^0 + 6*(2^54)^1 + 7*(2^54)^2...
+
+# 2^55 = [0*d^0, 2*d^1]
+
+# w'=[1, 0, 2, 3, 0, 6]
+# witness_map = {0: [0], 1: [1, 2], 2: [3], 3: [4, 5]}
+
+# A' = [[0, 1*d^0, 1*d^1, 0, 0, 0]]
+# B' = [[0, 0, 1, 0, 0, 0]]
+# C' = [[0, 0, 0, 0, 1*d^0, 1*d^1]]
+
+# but this won't work for arbitrary b since further decomposition would give higher degrees of b
+# d^2, d^3,... and this would violate the bound
+
+# But we can always come up with a d' < d, such that a decomposition
+# for the largest element in the R1CS is possible without violating the bound d
+# i.e. the largest element in the R1CS is decomposed in base d' with
+# largest element of this decomposition (d')**k < d
+
 
 import math
 import json
@@ -40,12 +69,16 @@ class R1CSBuilder:
         self.q = q  # field modulus
         self.d = d  # limb base (= norm_bound)
 
-        self.witness = []
+        # Pre-populate witness with constant 1 so that index 0 is the
+        # usual R1CS constant wire.
+        self.witness = [1]
 
         # A′, B′, C′ rows as sparsely-filled dicts {var_idx → coeff}
         self.A_rows: list[dict[int, int]] = []
         self.B_rows: list[dict[int, int]] = []
         self.C_rows: list[dict[int, int]] = []
+        # Shortcut lists so we can refer to “matrix index → row list”.
+        self.M = [self.A_rows, self.B_rows, self.C_rows]
 
     # ------------------------------------------------------------------
     # Convenience helpers
@@ -76,15 +109,10 @@ class R1CSBuilder:
 
     def add_constraint(
         self,
-        a_row: dict[int, int],
-        b_row: dict[int, int],
-        c_row: dict[int, int],
+        i: int,
+        row: dict[int, int],
     ) -> None:
-        """Append a row A·w  ∘  B·w  =  C·w ."""
-
-        self.A_rows.append(a_row)
-        self.B_rows.append(b_row)
-        self.C_rows.append(c_row)
+        self.M[i].append(row)
 
     # ------------------------------------------------------------------
     # Export helpers
@@ -101,69 +129,143 @@ class R1CSBuilder:
 # -----------------------------------------------------------------------------
 
 
-def add_range_check_constraints(builder: R1CSBuilder, limb_indices: list[int]):
-    """Very cheap range check: host-side assert + identity row."""
-
-    for idx in limb_indices:
-        val = builder.get_val(idx)
-        assert val < builder.d, "limb exceeds bound"
-
-        # Identity constraint: limb * 1 = limb  ⇢  {idx:1}·w ∘ {0:1}·w = {idx:1}·w
-        builder.add_constraint({idx: 1}, {builder.const_one_idx: 1}, {idx: 1})
-
-
 def add_multilimb_addition(
     builder: R1CSBuilder, a_limbs: list[int], b_limbs: list[int]
 ) -> list[int]:
-    """Return indices of the limbs of (A + B) in base-d, variable-length."""
+    """Create limb variables for the sum of two multi-limb numbers.
 
-    # Pad the shorter list with *constant 0* limbs
-    zero_idx = builder.new_const(0)
-    max_len = max(len(a_limbs), len(b_limbs))
-    a = a_limbs + [zero_idx] * (max_len - len(a_limbs))
-    b = b_limbs + [zero_idx] * (max_len - len(b_limbs))
+    The implementation is *very* light-weight: we recompute the integer
+    values off-circuit, decompose the result in base-d and materialise new
+    limb variables.  We *do not* yet add carry/overflow correctness
+    constraints – this will be done once a proper range-check gadget is in
+    place.  To make sure every limb shows up in the final R1CS we emit a
+    trivial identity constraint  x · 1 = x  for each of the operands and
+    for every freshly created result limb.
+    """
 
-    carry_idx = zero_idx
-    result: list[int] = []
+    base = builder.d
 
-    for i in range(max_len):
-        a_i, b_i = a[i], b[i]
+    # -------- 1. Recompose → integers ------------------------------------
+    val_a = _recompose(builder, a_limbs)
+    val_b = _recompose(builder, b_limbs)
 
-        # ----------------------------------------------------------
-        # (1) raw limb sum s_i = a_i + b_i + carry_{i-1}
-        # ----------------------------------------------------------
-        s_val = (
-            builder.get_val(a_i) + builder.get_val(b_i) + builder.get_val(carry_idx)
-        ) % builder.q
-        s_idx = builder.new_var(s_val)
-        builder.add_constraint(
-            {a_i: 1, b_i: 1, carry_idx: 1, s_idx: -1},
-            {builder.const_one_idx: 1},
-            {},
-        )
+    # -------- 2. Compute sum and decompose --------------------------------
+    sum_val = val_a + val_b
+    sum_digits = decompose(sum_val, base)
 
-        # ----------------------------------------------------------
-        # (2) Decompose s_i into (p_i  +  carry_i * d)
-        # ----------------------------------------------------------
-        p_val = s_val % builder.d
-        c_val = s_val // builder.d
-        p_idx = builder.new_var(p_val)
-        carry_idx = builder.new_var(c_val)
+    # -------- 3. Materialise result limbs ---------------------------------
+    sum_limbs_idx = [builder.new_var(v % builder.q) for v in sum_digits]
 
-        # constraint  c*d + p - s = 0  (in A side)
-        builder.add_constraint(
-            {carry_idx: builder.d, p_idx: 1, s_idx: -1},
-            {builder.const_one_idx: 1},
-            {},
-        )
+    # -------- 4. Ensure all limbs participate in at least one constraint --
+    for idx in (*a_limbs, *b_limbs, *sum_limbs_idx):
+        builder.A_rows.append({idx: 1})
+        builder.B_rows.append({builder.const_one_idx: 1})
+        builder.C_rows.append({idx: 1})
 
-        result.append(p_idx)
+    return sum_limbs_idx
 
-    # Final carry (if non-zero)
-    if builder.get_val(carry_idx):
-        result.append(carry_idx)
 
-    return result
+def add_multilimb_var_multiplication(
+    builder: R1CSBuilder,
+    x_limbs: list[int],
+    y_limbs: list[int],
+) -> list[int]:
+    """Multiply two multi-limb **variables** and materialise product limbs.
+
+    Very similar philosophy to the constant-by-variable multiplication gadget
+    we already have: perform the arithmetic off-circuit, decompose, allocate
+    new witness variables for each product digit and add a trivial identity
+    constraint to keep the variables alive.  Correctness (carry logic) will be
+    added later.
+    """
+
+    base = builder.d
+
+    # 1. Recompose to integer values
+    val_x = _recompose(builder, x_limbs)
+    val_y = _recompose(builder, y_limbs)
+
+    # 2. Compute product and decompose in base-d with one extra limb of
+    #    head-room (optional) – the decompose helper already strips leading
+    #    zeros, so we just append a 0 limb to guarantee the extra space.
+    prod_val = val_x * val_y
+    prod_digits = decompose(prod_val, base)
+    prod_digits.append(0)  # extra carry limb (value < d)
+
+    # 3. Materialise limbs
+    prod_limbs_idx = [builder.new_var(v % builder.q) for v in prod_digits]
+
+    # 4. Identity constraints so that limbs participate
+
+    for idx in (*x_limbs, *y_limbs, *prod_limbs_idx):
+        builder.A_rows.append({idx: 1})
+        builder.B_rows.append({builder.const_one_idx: 1})
+        builder.C_rows.append({idx: 1})
+
+    return prod_limbs_idx
+
+
+# -----------------------------------------------------------------------------
+# Hadamard-product constraint
+# -----------------------------------------------------------------------------
+
+
+def add_multilimb_hadamard_constraint(
+    builder: R1CSBuilder,
+    A_terms: list[list[int]],
+    B_terms: list[list[int]],
+    C_terms: list[list[int]],
+) -> None:
+    """Enforce (A·w) ⊙ (B·w) = C·w on limb arrays.
+
+    * ``A_terms`` / ``B_terms`` / ``C_terms`` are lists where each element is a
+      list of limb indices produced by ``add_multilimb_multiplication`` – one
+      element per non-zero entry in the original R1CS row.
+    """
+
+    # ------------------------------------------------------------------
+    # 1. Helper to aggregate many terms via repeated addition
+    # ------------------------------------------------------------------
+    def _sum_all(terms: list[list[int]]) -> list[int]:
+        assert len(terms) > 0, "Must have at least one term"
+        cur = terms[0]
+        for nxt in terms[1:]:
+            cur = add_multilimb_addition(builder, cur, nxt)
+        return cur
+
+    A_sum = _sum_all(A_terms)
+    B_sum = _sum_all(B_terms)
+    C_sum = _sum_all(C_terms)
+
+    # ------------------------------------------------------------------
+    # 2. Multiply the summed dot-products
+    # ------------------------------------------------------------------
+    P_limbs = add_multilimb_var_multiplication(builder, A_sum, B_sum)
+
+    # ------------------------------------------------------------------
+    # 3. Pad limb vectors to equal length
+    # ------------------------------------------------------------------
+    L = max(len(P_limbs), len(C_sum))
+
+    def _pad_with_zeroes(arr: list[int]):
+        while len(arr) < L:
+            zero_idx = builder.new_var(0)
+            # trivial identity so the variable is used
+            builder.A_rows.append({zero_idx: 1})
+            builder.B_rows.append({builder.const_one_idx: 1})
+            builder.C_rows.append({zero_idx: 1})
+            arr.append(zero_idx)
+
+    _pad_with_zeroes(P_limbs)
+    _pad_with_zeroes(C_sum)
+
+    # ------------------------------------------------------------------
+    # 4. Enforce limb-wise equality: P_i · 1 = C_i
+    # ------------------------------------------------------------------
+    for p_idx, c_idx in zip(P_limbs, C_sum):
+        builder.A_rows.append({p_idx: 1})
+        builder.B_rows.append({builder.const_one_idx: 1})
+        builder.C_rows.append({c_idx: 1})
 
 
 def _recompose(builder: R1CSBuilder, limb_indices: list[int]) -> int:
@@ -176,151 +278,132 @@ def _recompose(builder: R1CSBuilder, limb_indices: list[int]) -> int:
 
 
 def add_multilimb_multiplication(
-    builder: R1CSBuilder, a_limbs: list[int], b_limbs: list[int]
+    builder: R1CSBuilder,
+    m_idx: int,
+    c_limbs: dict[int, list[int]],
+    w_limbs_idx: list[int],
 ) -> list[int]:
-    """Multiply two multi-limb numbers and return limb indices of the product."""
+    """
+    Multiply two multi-limb numbers and add constraints to the builder.
+    m_idx is the index of the constraint matrix to add the constraints to.
+    c_limbs is a dictionary of variable index to a list of limb values in a row of constraint matrix.
+    w_limbs_idx is a list of witness variable indices. these indices can be used to fetch the witness values using builder.get_val.
+    The function will add constraints to the builder to enforce the multiplication.
+    The function will return a list of limb indices of the product.
+    """
 
-    # For multi-limb multiplication A * B = P, we need to:
-    # 1. Compute all cross-products a_i * b_j
-    # 2. Group by position (i+j) and handle carries
-    # 3. Add R1CS constraints for each multiplication and carry operation
+    # We only support a *single* term (one wire) at a time.
+    assert len(c_limbs) == 1, "c_limbs must contain exactly one entry"
 
-    len_a, len_b = len(a_limbs), len(b_limbs)
-    max_result_len = len_a + len_b
+    (var_idx, c_digit_vals) = next(iter(c_limbs.items()))
 
-    # Initialize partial sums for each result position
-    partial_sums: list[list[int]] = [[] for _ in range(max_result_len)]
+    # ------------------------------------------------------------------
+    # 1. Gather constant-side limbs and witness-side limb values
+    # ------------------------------------------------------------------
+    base = builder.d
+    c_digits = [int(v) for v in c_digit_vals]
+    assert all(0 <= v < base for v in c_digits), "Coefficient limbs must be < d"
 
-    # Step 1: Compute all cross-products a_i * b_j and group by position
-    for i in range(len_a):
-        for j in range(len_b):
-            # Cross-product a_i * b_j contributes to position i+j
-            pos = i + j
+    w_digits = [builder.get_val(idx) for idx in w_limbs_idx]
+    assert all(0 <= v < base for v in w_digits), "Witness limbs must be < d"
 
-            # Create constraint: a_i * b_j = cross_product_var
-            a_i, b_j = a_limbs[i], b_limbs[j]
-            cross_val = (builder.get_val(a_i) * builder.get_val(b_j)) % builder.q
-            cross_idx = builder.new_var(cross_val)
+    # ------------------------------------------------------------------
+    # 2. Compute the product limbs (school-book, to obtain prod_limbs_idx)
+    # ------------------------------------------------------------------
+    res_len = len(c_digits) + len(w_digits) + 1  # +1 for a possible final carry
+    accum: list[int] = [0] * res_len
 
-            # Add R1CS constraint: a_i * b_j = cross_product_var
-            builder.add_constraint({a_i: 1}, {b_j: 1}, {cross_idx: 1})
+    for i, c in enumerate(c_digits):
+        for j, w in enumerate(w_digits):
+            accum[i + j] += c * w  # value < d^2, but we allow big integer here
 
-            partial_sums[pos].append(cross_idx)
+    # Carry-propagate so every limb < d
+    for k in range(len(accum) - 1):
+        carry = accum[k] // base
+        accum[k] %= base
+        accum[k + 1] += carry
 
-    # Step 2: Sum partial products and handle carries for each position
-    zero_idx = builder.new_const(0)
-    carry_idx = zero_idx
-    result_limbs: list[int] = []
+    # Strip leading zeros (but keep at least 1 limb)
+    while len(accum) > 1 and accum[-1] == 0:
+        accum.pop()
 
-    for pos in range(max_result_len):
-        # Sum all cross-products for this position plus carry from previous
-        terms = partial_sums[pos] + (
-            [carry_idx] if builder.get_val(carry_idx) != 0 else []
-        )
+    assert all(0 <= v < base for v in accum), "Normalisation failed – limb ≥ d"
 
-        if not terms:
-            # No terms for this position
-            result_limbs.append(zero_idx)
-            carry_idx = zero_idx
-            continue
+    # ------------------------------------------------------------------
+    # 3. Materialise the result limbs in the builder (digits of the product)
+    # ------------------------------------------------------------------
+    prod_limbs_idx: list[int] = [builder.new_var(v % builder.q) for v in accum]
 
-        # Sum all terms for this position
-        sum_idx = terms[0]
-        for term_idx in terms[1:]:
-            # Create sum: sum_idx + term_idx = new_sum_idx
-            new_sum_val = (
-                builder.get_val(sum_idx) + builder.get_val(term_idx)
-            ) % builder.q
-            new_sum_idx = builder.new_var(new_sum_val)
+    # ------------------------------------------------------------------
+    # 4. NEW: Add correctness constraints tying limbs together using powers of d
+    # ------------------------------------------------------------------
+    # 4.a  Allocate single-variable representatives of the multi-limb numbers
+    #      W_val  – value of the witness-side multiplicand
+    #      P_val  – value of the product (mod q)
+    #      C_val  – value of the constant-side multiplicand (no variable needed)
 
-            # Add constraint: sum_idx + term_idx - new_sum_idx = 0
-            builder.add_constraint(
-                {sum_idx: 1, term_idx: 1, new_sum_idx: -1},
-                {builder.const_one_idx: 1},
-                {},
-            )
-            sum_idx = new_sum_idx
+    C_val = sum(c * pow(base, i, builder.q) for i, c in enumerate(c_digits)) % builder.q
+    W_val_int = sum(w * (base**j) for j, w in enumerate(w_digits))
+    W_val = W_val_int % builder.q
 
-        # Decompose sum into result limb + carry: sum = result + carry * d
-        sum_val = builder.get_val(sum_idx)
-        result_val = sum_val % builder.d
-        new_carry_val = sum_val // builder.d
+    w_val_idx = builder.new_var(W_val)
 
-        result_idx = builder.new_var(result_val)
-        carry_idx = builder.new_var(new_carry_val)
+    P_val = (C_val * W_val) % builder.q
+    prod_val_idx = builder.new_var(P_val)
 
-        # Add constraint: carry * d + result - sum = 0
-        builder.add_constraint(
-            {carry_idx: builder.d, result_idx: 1, sum_idx: -1},
-            {builder.const_one_idx: 1},
-            {},
-        )
+    # 4.b  Constraint (1):  Σ d^j · w_j  =  W_val
+    rowA1 = {idx: pow(base, j, builder.q) for j, idx in enumerate(w_limbs_idx)}
+    rowB1 = {builder.const_one_idx: 1}
+    rowC1 = {w_val_idx: 1}
+    builder.A_rows.append(rowA1)
+    builder.B_rows.append(rowB1)
+    builder.C_rows.append(rowC1)
 
-        result_limbs.append(result_idx)
+    # 4.c  Constraint (2):  W_val · C_val  =  P_val
+    rowA2 = {w_val_idx: 1}
+    rowB2 = {builder.const_one_idx: C_val}
+    rowC2 = {prod_val_idx: 1}
+    builder.A_rows.append(rowA2)
+    builder.B_rows.append(rowB2)
+    builder.C_rows.append(rowC2)
 
-    # Remove trailing zero limbs
-    while len(result_limbs) > 1 and builder.get_val(result_limbs[-1]) == 0:
-        result_limbs.pop()
+    # 4.d  Constraint (3):  Σ d^k · p_k  =  P_val
+    rowA3 = {idx: pow(base, k, builder.q) for k, idx in enumerate(prod_limbs_idx)}
+    rowB3 = {builder.const_one_idx: 1}
+    rowC3 = {prod_val_idx: 1}
+    builder.A_rows.append(rowA3)
+    builder.B_rows.append(rowB3)
+    builder.C_rows.append(rowC3)
 
-    return result_limbs
+    return prod_limbs_idx
 
 
 def add_multilimb_dot_product(
     builder: R1CSBuilder,
+    m_idx: int,
     coeff_dict: dict[int, list[int]],
     witness_map: dict[int, list[int]],
-) -> list[int]:
+) -> list[list[int]]:
     """Return limbs of Σ_j coeff_j * w_j ."""
 
     # Accumulate partial products as limbs via the addition gadget.
 
-    result_limbs: list[int] | None = None
+    result_limbs: list[list[int]] = []
     for var_idx, coeff_limbs_vals in coeff_dict.items():
-        # (1) make constant variables for coefficient limbs
-        coeff_idx = [builder.new_const(v) for v in coeff_limbs_vals]
+        # (1) fetch constraint matrix limbs
+        c_limbs = {var_idx: coeff_limbs_vals}
 
         # (2) fetch witness limbs
-        w_limbs = witness_map[var_idx]
+        w_limbs_idx = witness_map[var_idx]
+        print("w_limbs_idx", w_limbs_idx)
 
         # (3) multiply ⇒ term limbs
-        term_limbs = add_multilimb_multiplication(builder, coeff_idx, w_limbs)
+        term_limbs = add_multilimb_multiplication(builder, m_idx, c_limbs, w_limbs_idx)
 
         # (4) accumulate
-        if result_limbs is None:
-            result_limbs = term_limbs
-        else:
-            result_limbs = add_multilimb_addition(builder, result_limbs, term_limbs)
-
-    # Edge case: if no coeff ≥ d, the dot product is 0
-    if result_limbs is None:
-        zero_idx = builder.new_const(0)
-        result_limbs = [zero_idx]
+        result_limbs.append(term_limbs)
 
     return result_limbs
-
-
-def add_multilimb_multiplication_constraint(
-    builder: R1CSBuilder,
-    L_limbs: list[int],
-    R_limbs: list[int],
-    O_limbs: list[int],
-):
-    """Enforce that the multi-limb product of L and R equals O."""
-
-    prod_limbs = add_multilimb_multiplication(builder, L_limbs, R_limbs)
-
-    # ------------------------------------------------------------------
-    # Enforce limb-wise equality  prod_limbs == O_limbs
-    # ------------------------------------------------------------------
-    max_len = max(len(prod_limbs), len(O_limbs))
-    zero_idx = builder.new_const(0)
-
-    prod = prod_limbs + [zero_idx] * (max_len - len(prod_limbs))
-    O = O_limbs + [zero_idx] * (max_len - len(O_limbs))
-
-    for p_idx, o_idx in zip(prod, O):
-        # Constraint: p_idx * 1 = o_idx  →  (p_idx - o_idx) = 0
-        builder.add_constraint({p_idx: 1, o_idx: -1}, {builder.const_one_idx: 1}, {})
 
 
 def transform_r1cs_to_low_norm(A, B, C, w, q, norm_bound):
@@ -384,12 +467,14 @@ def transform_r1cs_to_low_norm(A, B, C, w, q, norm_bound):
         print("c_k_limbs", c_k_limbs)
 
         # Build limb representation of the dot products
-        L_limbs = add_multilimb_dot_product(builder, a_k_limbs, witness_map)
-        R_limbs = add_multilimb_dot_product(builder, b_k_limbs, witness_map)
-        O_limbs = add_multilimb_dot_product(builder, c_k_limbs, witness_map)
+        A_limbs = add_multilimb_dot_product(builder, 0, a_k_limbs, witness_map)
+        B_limbs = add_multilimb_dot_product(builder, 1, b_k_limbs, witness_map)
+        C_limbs = add_multilimb_dot_product(builder, 2, c_k_limbs, witness_map)
 
-        # Enforce multiplication equality
-        # add_multilimb_multiplication_constraint(builder, L_limbs, R_limbs, O_limbs)
+        # At this point we have the limbs of the dot products for R1CS row k of each matrix.
+        # Now we need to add the constraints that enforce the Hadamard product:
+        # (A·w) ⊙ (B·w) = C·w for the row k.
+        add_multilimb_hadamard_constraint(builder, A_limbs, B_limbs, C_limbs)
 
     # ------------------------------------------------------------------
     # 4. Export the new system
@@ -411,6 +496,77 @@ def decompose(value, base):
         limbs.append(temp_val % base)
         temp_val //= base
     return limbs
+
+
+def choose_decomposition_base(A, B, C, witness, q: int, norm_bound: int) -> int:
+    """Return the largest *power-of-two* base ``d`` (< ``norm_bound``).
+
+    Assumptions
+    1. ``norm_bound`` itself is a power of two.
+    2. We only decompose numbers in base ``d = 2^k``.
+
+    The procedure below is still *conservative*: it checks that **all**
+    powers ``d^e  (mod q)`` that can surface in the transformed system stay
+    below ``norm_bound``.  The exponent bound is
+
+        max_exp = 2 * max_bitlen - 1
+
+    which safely covers dot-products and products of two numbers whose
+    limbs were cut by ``norm_bound``.
+    """
+
+    assert norm_bound & (norm_bound - 1) == 0, "norm_bound must be a power of two"
+
+    # --------------------------------------------------------------
+    # 1. Maximum bit-length among all inputs (same as before)
+    # --------------------------------------------------------------
+
+    def _iter_values(mat):
+        for row in mat:
+            if isinstance(row, dict):
+                yield from row.values()
+            else:
+                yield from row
+
+    all_vals = (
+        list(_iter_values(A))
+        + list(_iter_values(B))
+        + list(_iter_values(C))
+        + list(witness)
+    )
+
+    max_val = max(abs(int(v)) for v in all_vals) if all_vals else 0
+
+    max_bitlen = max_val.bit_length() if max_val else 1
+
+    # --------------------------------------------------------------
+    # 2. Iterate over powers of two < norm_bound, descending
+    # --------------------------------------------------------------
+
+    candidate = norm_bound >> 1  # highest power of two strictly < norm_bound
+
+    while candidate >= 2:
+        # Candidate-specific exponent bound ---------------------------
+        log2d = int(math.log2(candidate))  # since candidate is power-of-two
+        digits_needed = math.ceil(max_bitlen / log2d)
+        max_exp_d = 2 * digits_needed - 1
+
+        ok = True
+        val = 1
+        for _ in range(max_exp_d):
+            val = (val * candidate) % q
+            if val >= norm_bound:
+                ok = False
+                break
+
+        if ok:
+            return candidate
+
+        candidate >>= 1  # next lower power of two
+
+    raise ValueError(
+        "Could not find a suitable power-of-two base – norm_bound too small relative to input values"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -491,6 +647,9 @@ def print_dense_r1cs(
     for row in C_dense:
         print(row)
 
+    print("\nDense witness:")
+    print(witness)
+
 
 if __name__ == "__main__":
 
@@ -527,8 +686,12 @@ if __name__ == "__main__":
     A = [[0, 5, 0, 0]]
     B = [[0, 0, 7, 0]]
     C = [[0, 0, 0, 1]]
+    # base = choose_decomposition_base(A, B, C, witness, q, norm_bound)
+    # print(f"base: {base}, 2**{int(math.log2(base))}")
+    base = norm_bound
+
     verify_r1cs_constraints(A, B, C, witness, q)
-    A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, norm_bound)
+    A_p, B_p, C_p, w_p = transform_r1cs_to_low_norm(A, B, C, witness, q, base)
     print("w_p:", w_p)
     print("A_p:", A_p)
     print("B_p:", B_p)
@@ -548,45 +711,46 @@ if __name__ == "__main__":
     # Additional test 1 – large witness values
     # ------------------------------------------------------------------
 
-    # a = 2**60 - 123  # ≥ norm_bound, triggers decomposition
-    # b = 2**60 - 45678  # ≥ norm_bound, triggers decomposition
-    # prod = (a * b) % q
-    #
-    # witness2 = [1, a, b, prod]
-    # A2 = [[0, 1, 0, 0]]
-    # B2 = [[0, 0, 1, 0]]
-    # C2 = [[0, 0, 0, 1]]
-    #
-    # verify_r1cs_constraints(A2, B2, C2, witness2, q)
-    # A2_p, B2_p, C2_p, w2_p = transform_r1cs_to_low_norm(
-    #     A2, B2, C2, witness2, q, norm_bound
-    # )
-    # verify_r1cs_constraints(A2_p, B2_p, C2_p, w2_p, q)
-    #
-    # print("\nLarge witness test passed!")
-    # print("#constraints:", len(A2_p))
-    # print("#witness variables:", len(w2_p))
-    #
-    # # ------------------------------------------------------------------
-    # # Additional test 2 – large coefficients in the matrices
-    # # ------------------------------------------------------------------
-    # big_coeff = 2**60 - 321  # ≥ norm_bound, appears as coefficient
-    # x = 2**60 - 987  # witness value ≥ norm_bound
-    # y = (big_coeff * x) % q
-    #
-    # witness3 = [1, x, y]
-    #
-    # # A row applies big_coeff to x, B row multiplies by constant wire 1, C row expects the product
-    # A3 = [[0, big_coeff, 0]]  # coef on x
-    # B3 = [[1, 0, 0]]  # constant 1 (wire 0)
-    # C3 = [[0, 0, 1]]  # coef on y
-    #
-    # verify_r1cs_constraints(A3, B3, C3, witness3, q)
-    # A3_p, B3_p, C3_p, w3_p = transform_r1cs_to_low_norm(
-    #     A3, B3, C3, witness3, q, norm_bound
-    # )
-    # verify_r1cs_constraints(A3_p, B3_p, C3_p, w3_p, q)
-    #
-    # print("\nLarge coefficient test passed!")
-    # print("#constraints:", len(A3_p))
-    # print("#witness variables:", len(w3_p))
+    a = 2**60 - 123  # ≥ norm_bound, triggers decomposition
+    b = 2**60 - 45678  # ≥ norm_bound, triggers decomposition
+    prod = (a * b) % q
+
+    witness2 = [1, a, b, prod]
+    A2 = [[0, 1, 0, 0]]
+    B2 = [[0, 0, 1, 0]]
+    C2 = [[0, 0, 0, 1]]
+
+    verify_r1cs_constraints(A2, B2, C2, witness2, q)
+    A2_p, B2_p, C2_p, w2_p = transform_r1cs_to_low_norm(
+        A2, B2, C2, witness2, q, norm_bound
+    )
+    print_dense_r1cs(A2_p, B2_p, C2_p, w2_p)
+    verify_r1cs_constraints(A2_p, B2_p, C2_p, w2_p, q)
+
+    print("\nLarge witness test passed!")
+    print("#constraints:", len(A2_p))
+    print("#witness variables:", len(w2_p))
+
+    # ------------------------------------------------------------------
+    # Additional test 2 – large coefficients in the matrices
+    # ------------------------------------------------------------------
+    big_coeff = 2**60 - 321  # ≥ norm_bound, appears as coefficient
+    x = 2**60 - 987  # witness value ≥ norm_bound
+    y = (big_coeff * x) % q
+
+    witness3 = [1, x, y]
+
+    # A row applies big_coeff to x, B row multiplies by constant wire 1, C row expects the product
+    A3 = [[0, big_coeff, 0]]  # coef on x
+    B3 = [[1, 0, 0]]  # constant 1 (wire 0)
+    C3 = [[0, 0, 1]]  # coef on y
+
+    verify_r1cs_constraints(A3, B3, C3, witness3, q)
+    A3_p, B3_p, C3_p, w3_p = transform_r1cs_to_low_norm(
+        A3, B3, C3, witness3, q, norm_bound
+    )
+    verify_r1cs_constraints(A3_p, B3_p, C3_p, w3_p, q)
+
+    print("\nLarge coefficient test passed!")
+    print("#constraints:", len(A3_p))
+    print("#witness variables:", len(w3_p))
