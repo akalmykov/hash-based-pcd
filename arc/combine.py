@@ -16,15 +16,16 @@ def combine_poly(f_i: List[galois.Poly], shift):
     gf1 = GF(1)
     r = [gf1]
     r.extend(
-        [shift ** (i - gf1 + sum(d_max - d[j] for j in range(i))) for i in range(1, m)]
+        shift ** int(GF(i) - gf1 + GF(sum(d_max - d[j] for j in range(i))))
+        for i in range(1, m)
     )
 
     resulting_poly = galois.Poly.Zero(GF)
     for i in range(m):
         ith_poly = r[i] * f_i[i]
         poly_sum = galois.Poly.One(GF)
-        for j in range(1, d_max - d[i] + 1):
-            poly_sum += galois.Poly([shift**j], field=GF, order="asc")
+        for l in range(1, d_max - d[i] + 1):
+            poly_sum += galois.Poly([shift**l], field=GF, order="asc")
         resulting_poly += ith_poly * poly_sum
     return resulting_poly
 
@@ -39,7 +40,10 @@ def combine_many(
     gf1 = GF(1)
     r = [gf1]
     r.extend(
-        [shift ** (i - gf1 + sum(d_max - d[j] for j in range(i))) for i in range(1, m)]
+        [
+            shift ** int(GF(i) - gf1 + GF(sum(d_max - d[j] for j in range(i))))
+            for i in range(1, m)
+        ]
     )
     all_evals = []
     for x_i in x:

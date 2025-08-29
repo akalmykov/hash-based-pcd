@@ -1,6 +1,6 @@
 import galois
 
-from constants import TEST_FIELD
+from .constants import TEST_FIELD
 
 
 def poly_quotient(poly, points):
@@ -14,7 +14,7 @@ def poly_quotient(poly, points):
     return (poly + ans_polynomial) // vanishing_polynomial
 
 
-# This is almost Quotient(f, S, Ans, Fill) in the paper
+# This is almost Quotient(f, S, Ans, Fill) in the paper, but without Fill
 # If x ∈ S, the value is given by Fill(x)
 # If x ∉ S, the value is given by (f(x) - AnsPoly(x)) / VanishingPoly(x)
 # where VanishingPoly(x) = 0 for x ∈ S
@@ -33,6 +33,26 @@ def quotient(claimed_eval, evaluation_point, answers: list[tuple[int, int]]):
         for answer in answers:
             denominator *= evaluation_point - answer[0]
         return numerator / denominator
+
+
+def quotient_codeword(GF, L, f, S, ans: dict[int, int], fill):
+    V = galois.Poly([1], field=GF)
+    for s in S:
+        V = V * galois.Poly([1, -s], field=GF)
+    ans_points = GF(list(ans.keys()))
+    ans_values = GF(list(ans.values()))
+    ans_poly = galois.lagrange_poly(ans_points, ans_values)
+
+    c = []
+    for i, x in enumerate(L):
+        if x in S:
+            c.append(fill(x))
+        else:
+            f_x = f[i]
+            ans_x = ans_poly(x)
+            v_x = V(x)
+            c.append((f_x - ans_x) / v_x)
+    return c
 
 
 if __name__ == "__main__":
